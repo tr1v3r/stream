@@ -11,21 +11,20 @@ import (
 
 func TestStream(t *testing.T) {
 	array := []int{1, 2, 3, 4}
-	result := stream.SliceOf[int, float64](array).
-		Map(func(i int) float64 { return float64(i + 1) }).
-		Map(func(f float64) any { return int(f) }).
+	result := stream.SliceOf[int](array).
+		Map(func(i int) any { return float64(i + 1) }).
 		Reduce(func(result, data any) any {
 			if result == nil {
-				return data.(int)
+				return data.(float64)
 			}
-			return result.(int) + data.(int)
+			return result.(float64) + data.(float64)
 		}).(int)
 	fmt.Println("result: ", result)
 }
 
 func TestStream_1(t *testing.T) {
 	array := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
-	stage := stream.SliceOf[int, any](array)
+	stage := stream.SliceOf[int](array)
 	fmt.Println("stream First: ", stage.First())
 	fmt.Println("stream Take: ", stage.Take())
 	fmt.Println("stream Last: ", stage.Last())
@@ -42,4 +41,7 @@ func TestStream_1(t *testing.T) {
 		return result + data
 	})
 	fmt.Println("stream Reduce sum: ", result)
+
+	// var x []any = []any{"hello", "world"}
+	// stream.SliceOf[string](x.([]string))
 }

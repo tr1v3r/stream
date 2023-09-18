@@ -2,27 +2,27 @@ package stream
 
 import "github.com/tr1v3r/stream/types"
 
-type Streamer[T, R any] interface {
+type Streamer[T any] interface {
 	// stateless operate 无状态操作
 
 	// Filter filter data by Judge result
-	Filter(types.Judge[T]) Streamer[T, R]
+	Filter(types.Judge[T]) Streamer[T]
 	// Map convert every T to R
-	Map(types.Mapper[T, R]) Streamer[R, any]
+	Map(types.Mapper[T, any]) Streamer[any]
 	// Peek peek ecah data
-	Peek(types.Consumer[T]) Streamer[T, R]
+	Peek(types.Consumer[T]) Streamer[T]
 
 	// stateful operate 有状态操作
 
 	// Distinct deduplicate data in source
-	Distinct() Streamer[T, R]
-	Sort(types.Comparator[T]) Streamer[T, R]
-	ReverseSort(types.Comparator[T]) Streamer[T, R]
-	Reverse() Streamer[T, R]
+	Distinct() Streamer[T]
+	Sort(types.Comparator[T]) Streamer[T]
+	ReverseSort(types.Comparator[T]) Streamer[T]
+	Reverse() Streamer[T]
 	// Limit limit data
-	Limit(int) Streamer[T, R]
-	Skip(int) Streamer[T, R]
-	Pick(start, end, interval int) Streamer[T, R]
+	Limit(int) Streamer[T]
+	Skip(int) Streamer[T]
+	Pick(start, end, interval int) Streamer[T]
 
 	// terminal operate 终止操作
 
