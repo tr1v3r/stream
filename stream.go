@@ -1,77 +1,185 @@
 package stream
 
-type (
-	// Judge calculate t and return true or false
-	Judge[T any] func(T) bool
+import (
+	"math/rand"
 
-	Mapper[T, R any] func(T) R
-
-	Comparator[T any] func(T, T) int
-
-	Consumer[T any] func(T) error
-
-	BinaryOperator[T any] func(T, T) T
-
-	Accumulator[T, R any] func(R, T) R
+	"github.com/tr1v3r/stream/types"
 )
 
-type Streamer[T, R any] interface {
-	// stateless operate 无状态操作
+var (
+	_ Streamer[any, int]     = newStreamer[any, int]()
+	_ Streamer[float64, int] = newStreamer[float64, int]()
+)
 
-	// // Filter filter data by Judge result
-	// Filter(Judge[T]) Streamer[T, R]
-	// Map convert every T to R
-	Map(Mapper[T, R]) Streamer[R, any]
-	// Peek(Consumer[T]) Streamer[T, R]
+func newStreamer[T, R any](data ...T) *streamer[T, R] { return &streamer[T, R]{data: data} }
 
-	// stateful operate 有状态操作
-
-	// // Distinct()
-	// Sort(Comparator[T]) Streamer[T, R]
-	// Reverse(Comparator[T]) Streamer[T, R]
-	// // Limit limit data
-	// Limit(int64) Streamer[T, R]
-	// Skip(int64) Streamer[T, R]
-	// Pick(start, end, interval int64) Streamer[T, R]
-
-	// // terminal operate 终止操作
-
-	// // ForEach
-	// ForEach(Consumer[T])
-	// // ToSlice
-	// ToSlice() []T
-	// // AllMatch
-	// AllMatch(Judge[T]) bool
-	// NonMatch(Judge[T]) bool
-	// AnyMatch(Judge[T]) bool
-	Reduce(accumulator BinaryOperator[T]) T
-	// ReduceFrom(initValue T, accumulator BinaryOperator[T]) T
-	// ReduceWith(initValue any, accumulator Accumulator[T, any]) any
-	// // Count return count result
-	// Count() int64
-}
-
-// Slice receive array and initlize streamer
-func Slice[T, R any](array []T) Streamer[T, R] { return &streamer[T, R]{data: array} }
-
-// var _ Streamer[any, int] = new(stream[int])
-// var _ Streamer[float64, int] = new(stream[float64])
+// streamer underlying streamer implement for Streamer
 type streamer[T, R any] struct {
 	data []T
 }
 
-func (s *streamer[T, R]) Map(mapper Mapper[T, R]) Streamer[R, any] {
+func (s *streamer[T, R]) Filter(judge types.Judge[T]) Streamer[T, R] {
+	var results []T
+	for _, item := range s.data {
+		if judge(item) {
+			results = append(results, item)
+		}
+	}
+	return newStreamer[T, R](results...)
+}
+func (s *streamer[T, R]) Map(mapper types.Mapper[T, R]) Streamer[R, any] {
 	var results []R
 	for _, item := range s.data {
 		results = append(results, mapper(item))
 	}
-	return &streamer[R, any]{data: results}
+	return newStreamer[R, any](results...)
+}
+func (s *streamer[T, R]) Peek(consumer types.Consumer[T]) Streamer[T, R] {
+	for _, item := range s.data {
+		consumer(item)
+	}
+	return s
 }
 
-func (s *streamer[T, R]) Reduce(accumulator BinaryOperator[T]) T {
+func (s *streamer[T, R]) Distinct() Streamer[T, R] {
+	for _, item := range s.data {
+		// TODO implement distinct logic
+		_ = item
+	}
+	return s
+}
+func (s *streamer[T, R]) Sort(comparator types.Comparator[T]) Streamer[T, R] {
+	// TODO implement sort logic
+	return s
+}
+func (s *streamer[T, R]) ReverseSort(comparator types.Comparator[T]) Streamer[T, R] {
+	// TODO implement reverse sort logic
+	return s
+}
+func (s *streamer[T, R]) Reverse() Streamer[T, R] {
+	for i, length := 0, len(s.data)-1; i <= length/2; i++ {
+		s.data[i], s.data[length-i] = s.data[length-i], s.data[i]
+	}
+	return s
+}
+func (s *streamer[T, R]) Limit(l int) Streamer[T, R] {
+	if int(l) < len(s.data) {
+		s.data = s.data[:l]
+	}
+	return s
+}
+func (s *streamer[T, R]) Skip(i int) Streamer[T, R] {
+	if int(i) < len(s.data) {
+		s.data = s.data[i:]
+	} else {
+		s.data = nil
+	}
+	return s
+}
+func (s *streamer[T, R]) Pick(start, end, interval int) Streamer[T, R] {
+	length := len(s.data)
+	if start >= length || end < 0 || interval < 0 || interval >= length {
+		s.data = nil
+		return s
+	}
+
+	if start < 0 {
+		start = 0
+	}
+	if end >= length {
+		end = length - 1
+	}
+
+	var results []T
+	for i := start; i <= end; i += interval {
+		results = append(results, s.data[i])
+	}
+	s.data = results
+
+	return s
+}
+
+func (s *streamer[T, R]) ForEach(consumer types.Consumer[T]) {
+	for _, item := range s.data {
+		consumer(item)
+	}
+}
+func (s *streamer[T, R]) ToSlice() []T {
+	return s.data
+}
+func (s *streamer[T, R]) AllMatch(judge types.Judge[T]) bool {
+	for _, item := range s.data {
+		if !judge(item) {
+			return false
+		}
+	}
+	return true
+}
+func (s *streamer[T, R]) NonMatch(judge types.Judge[T]) bool {
+	for _, item := range s.data {
+		if judge(item) {
+			return false
+		}
+	}
+	return true
+}
+func (s *streamer[T, R]) AnyMatch(judge types.Judge[T]) bool {
+	for _, item := range s.data {
+		if judge(item) {
+			return true
+		}
+	}
+	return false
+}
+func (s *streamer[T, R]) Reduce(accumulator types.BinaryOperator[T]) T {
 	var result T
 	for _, item := range s.data {
 		result = accumulator(result, item)
 	}
 	return result
+}
+func (s *streamer[T, R]) ReduceFrom(initValue T, accumulator types.BinaryOperator[T]) T {
+	var result T = initValue
+	for _, item := range s.data {
+		result = accumulator(result, item)
+	}
+	return result
+}
+func (s *streamer[T, R]) ReduceWith(initValue any, accumulator types.Accumulator[T, any]) any {
+	var result = initValue
+	for _, item := range s.data {
+		result = accumulator(result, item)
+	}
+	return result
+}
+func (s *streamer[T, R]) ReduceBy(initValueBulider func(sizeMayNegative int) any, accumulator types.Accumulator[T, any]) any {
+	var result = initValueBulider(len(s.data))
+	for _, item := range s.data {
+		result = accumulator(result, item)
+	}
+	return result
+}
+func (s *streamer[T, R]) First() T {
+	var t T
+	if s.Count() > 0 {
+		t = s.data[0]
+	}
+	return t
+}
+func (s *streamer[T, R]) Take() T {
+	var t T
+	if count := s.Count(); count > 0 {
+		t = s.data[rand.Int63n(count)]
+	}
+	return t
+}
+func (s *streamer[T, R]) Last() T {
+	var t T
+	if count := s.Count(); count > 0 {
+		t = s.data[count-1]
+	}
+	return t
+}
+func (s *streamer[T, R]) Count() int64 {
+	return int64(len(s.data))
 }
