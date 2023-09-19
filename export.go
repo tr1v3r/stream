@@ -20,16 +20,17 @@ type Streamer[T any] interface {
 	ReverseSort(types.Comparator[T]) Streamer[T]
 	Reverse() Streamer[T]
 	// Limit limit data
-	Limit(int) Streamer[T]
-	Skip(int) Streamer[T]
+	Limit(int64) Streamer[T]
+	Skip(int64) Streamer[T]
 	Pick(start, end, interval int) Streamer[T]
 
 	// terminal operate 终止操作
 
-	// ForEach
-	ForEach(types.Consumer[T])
 	// ToSlice
 	ToSlice() []T
+	Collect(types.Collector[T]) any
+	// ForEach
+	ForEach(types.Consumer[T])
 	// Match methods
 	AllMatch(types.Judge[T]) bool
 	NonMatch(types.Judge[T]) bool
@@ -45,6 +46,8 @@ type Streamer[T any] interface {
 	First() T
 	Take() T
 	Last() T
+	// Max() T
+	// Min() T
 	// Count return count result
 	Count() int64
 }

@@ -11,16 +11,19 @@ var (
 	_ Streamer[float64] = newStreamer[float64]()
 )
 
-func newStreamer[T any](data ...T) *streamer[T] { return &streamer[T]{data: data} }
+// newStreamer return streamer
+func newStreamer[T any](data ...T) *streamer[T] {
+	return &streamer[T]{source: newIterator[T](data)}
+}
 
 // streamer underlying streamer implement for Streamer
 type streamer[T any] struct {
-	data []T
+	source iterator[T]
 }
 
 func (s *streamer[T]) Filter(judge types.Judge[T]) Streamer[T] {
 	var results []T
-	for _, item := range s.data {
+	for item := s.source.Next(); s.source.HasNext(); item = s.source.Next() {
 		if judge(item) {
 			results = append(results, item)
 		}
@@ -29,20 +32,21 @@ func (s *streamer[T]) Filter(judge types.Judge[T]) Streamer[T] {
 }
 func (s *streamer[T]) Map(mapper types.Mapper[T, any]) Streamer[any] {
 	var results []any
-	for _, item := range s.data {
+	for item := s.source.Next(); s.source.HasNext(); item = s.source.Next() {
 		results = append(results, mapper(item))
 	}
 	return newStreamer[any](results...)
 }
 func (s *streamer[T]) Peek(consumer types.Consumer[T]) Streamer[T] {
-	for _, item := range s.data {
+	s.source.Reset()
+	for item := s.source.Next(); s.source.HasNext(); item = s.source.Next() {
 		consumer(item)
 	}
 	return s
 }
 
 func (s *streamer[T]) Distinct() Streamer[T] {
-	for _, item := range s.data {
+	for item := s.source.Next(); s.source.HasNext(); item = s.source.Next() {
 		// TODO implement distinct logic
 		_ = item
 	}
@@ -57,58 +61,52 @@ func (s *streamer[T]) ReverseSort(comparator types.Comparator[T]) Streamer[T] {
 	return s
 }
 func (s *streamer[T]) Reverse() Streamer[T] {
-	for i, length := 0, len(s.data)-1; i <= length/2; i++ {
-		s.data[i], s.data[length-i] = s.data[length-i], s.data[i]
+	var data = s.source.AllLeft()
+	for i, length := 0, len(data)-1; i <= length/2; i++ {
+		data[i], data[length-i] = data[length-i], data[i]
 	}
-	return s
+	return newStreamer[T](data...)
 }
-func (s *streamer[T]) Limit(l int) Streamer[T] {
-	if int(l) < len(s.data) {
-		s.data = s.data[:l]
+func (s *streamer[T]) Limit(l int64) Streamer[T] {
+	s.source.Reset()
+
+	var data []T
+	for i := 0; i < int(l) && s.source.HasNext(); i++ {
+		data = append(data, s.source.Next())
 	}
-	return s
+	return newStreamer[T](data...)
 }
-func (s *streamer[T]) Skip(i int) Streamer[T] {
-	if int(i) < len(s.data) {
-		s.data = s.data[i:]
-	} else {
-		s.data = nil
-	}
-	return s
+func (s *streamer[T]) Skip(n int64) Streamer[T] {
+	s.source.NextN(n) // skip n
+	return newStreamer[T](s.source.AllLeft()...)
 }
 func (s *streamer[T]) Pick(start, end, interval int) Streamer[T] {
-	length := len(s.data)
-	if start >= length || end < 0 || interval < 0 || interval >= length {
-		s.data = nil
-		return s
-	}
-
-	if start < 0 {
-		start = 0
-	}
-	if end >= length {
-		end = length - 1
-	}
+	s.source.NextN(int64(start)) // skip start
 
 	var results []T
-	for i := start; i <= end; i += interval {
-		results = append(results, s.data[i])
+	for i := 0; i < end && s.source.HasNext(); i++ { // pick
+		item := s.source.Next()
+		if i%interval != 0 {
+			results = append(results, item)
+		}
 	}
-	s.data = results
 
-	return s
+	return newStreamer[T](results...)
 }
 
+func (s *streamer[T]) Collect(to types.Collector[T]) any {
+	return to(s.source.AllLeft()...)
+}
 func (s *streamer[T]) ForEach(consumer types.Consumer[T]) {
-	for _, item := range s.data {
+	for item := s.source.Next(); s.source.HasNext(); item = s.source.Next() {
 		consumer(item)
 	}
 }
 func (s *streamer[T]) ToSlice() []T {
-	return s.data
+	return s.source.AllLeft()
 }
 func (s *streamer[T]) AllMatch(judge types.Judge[T]) bool {
-	for _, item := range s.data {
+	for item := s.source.Next(); s.source.HasNext(); item = s.source.Next() {
 		if !judge(item) {
 			return false
 		}
@@ -116,7 +114,7 @@ func (s *streamer[T]) AllMatch(judge types.Judge[T]) bool {
 	return true
 }
 func (s *streamer[T]) NonMatch(judge types.Judge[T]) bool {
-	for _, item := range s.data {
+	for item := s.source.Next(); s.source.HasNext(); item = s.source.Next() {
 		if judge(item) {
 			return false
 		}
@@ -124,7 +122,7 @@ func (s *streamer[T]) NonMatch(judge types.Judge[T]) bool {
 	return true
 }
 func (s *streamer[T]) AnyMatch(judge types.Judge[T]) bool {
-	for _, item := range s.data {
+	for item := s.source.Next(); s.source.HasNext(); item = s.source.Next() {
 		if judge(item) {
 			return true
 		}
@@ -133,53 +131,41 @@ func (s *streamer[T]) AnyMatch(judge types.Judge[T]) bool {
 }
 func (s *streamer[T]) Reduce(accumulator types.BinaryOperator[T]) T {
 	var result T
-	for _, item := range s.data {
+	for item := s.source.Next(); s.source.HasNext(); item = s.source.Next() {
 		result = accumulator(result, item)
 	}
 	return result
 }
 func (s *streamer[T]) ReduceFrom(initValue T, accumulator types.BinaryOperator[T]) T {
 	var result T = initValue
-	for _, item := range s.data {
+	for item := s.source.Next(); s.source.HasNext(); item = s.source.Next() {
 		result = accumulator(result, item)
 	}
 	return result
 }
 func (s *streamer[T]) ReduceWith(initValue any, accumulator types.Accumulator[T, any]) any {
 	var result = initValue
-	for _, item := range s.data {
+	for item := s.source.Next(); s.source.HasNext(); item = s.source.Next() {
 		result = accumulator(result, item)
 	}
 	return result
 }
 func (s *streamer[T]) ReduceBy(initValueBulider func(sizeMayNegative int) any, accumulator types.Accumulator[T, any]) any {
-	var result = initValueBulider(len(s.data))
-	for _, item := range s.data {
+	var result = initValueBulider(int(s.source.Size()))
+	for item := s.source.Next(); s.source.HasNext(); item = s.source.Next() {
 		result = accumulator(result, item)
 	}
 	return result
 }
 func (s *streamer[T]) First() T {
-	var t T
-	if s.Count() > 0 {
-		t = s.data[0]
-	}
-	return t
+	return s.source.Next()
 }
 func (s *streamer[T]) Take() T {
-	var t T
-	if count := s.Count(); count > 0 {
-		t = s.data[rand.Int63n(count)]
-	}
-	return t
+	return s.source.NextN(rand.Int63n(s.source.Size()))
 }
 func (s *streamer[T]) Last() T {
-	var t T
-	if count := s.Count(); count > 0 {
-		t = s.data[count-1]
-	}
-	return t
+	return s.source.NextN(s.source.Size() - 1)
 }
 func (s *streamer[T]) Count() int64 {
-	return int64(len(s.data))
+	return s.source.Size()
 }
