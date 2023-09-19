@@ -9,6 +9,7 @@ type Streamer[T any] interface {
 	Filter(types.Judge[T]) Streamer[T]
 	// Map convert every T to R
 	Map(types.Mapper[T, any]) Streamer[any]
+	// FlatMap(func(T) Streamer[any]) Streamer[any]
 	// Peek peek ecah data
 	Peek(types.Consumer[T]) Streamer[T]
 
@@ -22,7 +23,10 @@ type Streamer[T any] interface {
 	// Limit limit data
 	Limit(int64) Streamer[T]
 	Skip(int64) Streamer[T]
-	Pick(start, end, interval int) Streamer[T]
+	Pick(startIndex, endIndex, interval int) Streamer[T]
+
+	// Execute eager execute streamer stage
+	Execute() Streamer[T]
 
 	// terminal operate 终止操作
 
@@ -50,4 +54,10 @@ type Streamer[T any] interface {
 	// Min() T
 	// Count return count result
 	Count() int64
+}
+
+// Concat concat streamers
+func Concat[T any](streamers ...Streamer[T]) Streamer[T] {
+	// TODO implment streamer concat operate
+	return streamers[0]
 }
