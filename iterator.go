@@ -1,8 +1,11 @@
 package stream
 
+import "github.com/tr1v3r/stream/types"
+
 var (
-	_ iterator[any] = newIterator[any]([]any{})
-	_ iterator[int] = newIterator[int]([]int{})
+	_ iterator[any] = new(staticIter[any])
+	_ iterator[int] = new(staticIter[int])
+	_ iterator[int] = new(supplyIter[int])
 )
 
 // iterator 迭代器
@@ -28,7 +31,7 @@ type iterator[T any] interface {
 
 // newIterator return iterator
 func newIterator[T any](data []T) iterator[T] {
-	return &staticIterator[T]{
+	return &staticIter[T]{
 		meta: meta{
 			current: 0,
 			size:    int64(len(data)),
@@ -71,24 +74,24 @@ func (m *meta) nextIndexN(n int64) (index int64) {
 	return m.current - 1
 }
 
-// staticIterator 静态迭代器
-type staticIterator[T any] struct {
+// staticIter 静态迭代器
+type staticIter[T any] struct {
 	meta
 	source []T
 }
 
 // Next return next element
-func (iter *staticIterator[T]) Next() T {
+func (iter *staticIter[T]) Next() T {
 	return iter.NextN(1)
 }
 
 // NextN return next n element
-func (iter *staticIterator[T]) NextN(n int64) T {
+func (iter *staticIter[T]) NextN(n int64) T {
 	return iter.source[iter.nextIndexN(n)]
 }
 
 // Left return all left element
-func (iter *staticIterator[T]) Left() (results []T) {
+func (iter *staticIter[T]) Left() (results []T) {
 	for index := iter.nextIndexN(1); index != -1; index = iter.nextIndexN(1) {
 		results = append(results, iter.source[index])
 	}
@@ -96,9 +99,35 @@ func (iter *staticIterator[T]) Left() (results []T) {
 }
 
 // Clone return a new iterator with same data
-func (iter *staticIterator[T]) Clone() iterator[T] {
-	return &staticIterator[T]{
-		meta:   iter.meta,
-		source: iter.source,
-	}
+func (iter staticIter[T]) Clone() iterator[T] { return &iter }
+
+type supplyIter[T any] struct {
+	curIndex int64
+	supply   types.Supplier[T]
 }
+
+func (s *supplyIter[T]) Size() int64         { return -1 }
+func (s *supplyIter[T]) Left() []T           { return nil }
+func (s *supplyIter[T]) CurIndex() int64     { return s.curIndex }
+func (s *supplyIter[T]) HasNext() bool       { return true }
+func (s *supplyIter[T]) HasNextN(int64) bool { return true }
+func (s *supplyIter[T]) Next() T             { return s.NextN(1) }
+func (s *supplyIter[T]) NextN(n int64) T {
+	s.curIndex += n
+	for i := 0; i < int(n)-1; i++ {
+		s.supply()
+	}
+	return s.supply()
+}
+func (s supplyIter[T]) Clone() iterator[T] { return &s }
+
+// Sortable implement sort.Interface
+type Sortable[T any] struct {
+	List []T
+	Cmp  types.Comparator[T]
+}
+
+// implement sort.Interface
+func (a *Sortable[T]) Len() int           { return len(a.List) }
+func (a *Sortable[T]) Less(i, j int) bool { return a.Cmp(a.List[i], a.List[j]) < 0 }
+func (a *Sortable[T]) Swap(i, j int)      { a.List[i], a.List[j] = a.List[j], a.List[i] }

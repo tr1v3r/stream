@@ -50,9 +50,7 @@ type Streamer[T any] interface {
 	First() T
 	Take() T
 	Last() T
-	// Max() T
-	// Min() T
-	// Count return count result
+	// Cout return count result
 	Count() int64
 }
 

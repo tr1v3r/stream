@@ -8,7 +8,10 @@ type (
 	Mapper[T, R any] func(T) R
 
 	// Comparator comparator for sort []T
-	Comparator[T any] func(T, T) int
+	// it is a BiFunction, which two input arguments are the type, and returns a int.
+	// if left is greater then right, it returns a positive number;
+	// if left is less then right, it returns a negative number; if the two input are equal, it returns
+	Comparator[T any] func(left T, right T) int
 
 	// Consumer consume T
 	Consumer[T any] func(...T)
@@ -21,4 +24,10 @@ type (
 
 	// Collector collect source to any data struct
 	Collector[T any] func(...T) any
+
+	// provide source data
+	Supplier[T any] func() T
+
+	// Unique unique item interface
+	Unique interface{ Key() string }
 )

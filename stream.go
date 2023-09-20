@@ -1,7 +1,9 @@
 package stream
 
 import (
+	"fmt"
 	"math/rand"
+	"sort"
 
 	"github.com/tr1v3r/stream/types"
 )
@@ -63,21 +65,44 @@ func (s *streamer[T]) Peek(consumer types.Consumer[T]) Streamer[T] {
 
 func (s *streamer[T]) Distinct() Streamer[T] {
 	return wrapStreamer[T](func() iterator[T] {
-		source, results := s.stage(), []T{}
+		source, results, keyMap := s.stage(), []T{}, map[string]T{}
 		for source.HasNext() {
-			// TODO implement distinct logic
-			_ = source.Next()
+			item := source.Next()
+
+			var key string
+			if keyer, ok := any(item).(types.Unique); ok {
+				key = keyer.Key()
+			} else {
+				key = fmt.Sprint(item)
+			}
+
+			if _, ok := keyMap[key]; !ok {
+				keyMap[key] = item
+				results = append(results, item)
+			}
 		}
 		return newIterator[T](results)
 	})
 }
 func (s *streamer[T]) Sort(comparator types.Comparator[T]) Streamer[T] {
-	// TODO implement sort logic
-	return s
+	return wrapStreamer[T](func() iterator[T] {
+		source, results := s.stage(), []T{}
+		for source.HasNext() {
+			results = append(results, source.Next())
+		}
+		sort.Sort(&Sortable[T]{List: results, Cmp: comparator})
+		return newIterator[T](results)
+	})
 }
 func (s *streamer[T]) ReverseSort(comparator types.Comparator[T]) Streamer[T] {
-	// TODO implement reverse sort logic
-	return s
+	return wrapStreamer[T](func() iterator[T] {
+		source, results := s.stage(), []T{}
+		for source.HasNext() {
+			results = append(results, source.Next())
+		}
+		sort.Sort(sort.Reverse(&Sortable[T]{List: results, Cmp: comparator}))
+		return newIterator[T](results)
+	})
 }
 func (s *streamer[T]) Reverse() Streamer[T] {
 	return wrapStreamer[T](func() iterator[T] {
@@ -136,6 +161,9 @@ func (s *streamer[T]) ForEach(consumer types.Consumer[T]) {
 	for source := s.stage(); source.HasNext(); {
 		consumer(source.Next())
 	}
+}
+func (s *streamer[T]) To(to func([]T) any) any {
+	return to(s.ToSlice())
 }
 func (s *streamer[T]) ToSlice() []T {
 	return s.stage().Left()
