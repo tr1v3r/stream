@@ -7,24 +7,23 @@ type Streamer[T any] interface {
 
 	// Filter filter data by Judge result
 	Filter(types.Judge[T]) Streamer[T]
-	// Map convert every T to R
-	Map(types.Mapper[T, any]) Streamer[any]
-	// FlatMap(func(T) Streamer[any]) Streamer[any]
-	// Peek peek ecah data
+	Map(types.Mapper[T]) Streamer[T]
+	Convert(types.Converter[T, any]) Streamer[any]
 	Peek(types.Consumer[T]) Streamer[T]
+	// FlatMap(func(T) Streamer[any]) Streamer[any]
 
 	// stateful operate 有状态操作
 
-	// Distinct deduplicate data in source
 	Distinct() Streamer[T]
 	Sort(types.Comparator[T]) Streamer[T]
 	ReverseSort(types.Comparator[T]) Streamer[T]
 	Reverse() Streamer[T]
-	// Limit limit data
 	Limit(int64) Streamer[T]
 	Skip(int64) Streamer[T]
 	Pick(startIndex, endIndex, interval int) Streamer[T]
 
+	// Append append data to streamer source
+	Append(...T) Streamer[T]
 	// Execute eager execute streamer stage
 	Execute() Streamer[T]
 
@@ -52,10 +51,4 @@ type Streamer[T any] interface {
 	Last() T
 	// Cout return count result
 	Count() int64
-}
-
-// Concat concat streamers
-func Concat[T any](streamers ...Streamer[T]) Streamer[T] {
-	// TODO implment streamer concat operate
-	return streamers[0]
 }

@@ -17,7 +17,7 @@ func TestStream(t *testing.T) {
 	fmt.Println("reverse sort: ", streamer.ReverseSort(func(l, r int) int { return l - r }).ToSlice())
 
 	result := stream.SliceOf[int](array...).
-		Map(func(i int) any { return float64(i + 1) }).
+		Convert(func(i int) any { return float64(i + 1) }).
 		Reduce(func(result, data any) any {
 			if result == nil {
 				return data.(float64)
@@ -27,11 +27,11 @@ func TestStream(t *testing.T) {
 	fmt.Println("result: ", result)
 
 	stream.SliceOf[int](array...).
-		Map(func(i int) any { return float64(i + 1) }).
+		Convert(func(i int) any { return float64(i + 1) }).
 		ForEach(func(data ...any) { fmt.Println(data...) })
 
 	floatResult := stream.SliceOf[int](array...).
-		Map(func(i int) any { return float64(i + 1) }).Collect(func(data ...any) any {
+		Convert(func(i int) any { return float64(i + 1) }).Collect(func(data ...any) any {
 		var floats []float64
 		for _, item := range data {
 			floats = append(floats, item.(float64))

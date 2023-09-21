@@ -33,12 +33,13 @@ func Question1Sub2(employees []*Employee) []*Employee {
 // - Q3: - 输入 employees，对于没有手机号为0的数据，随机填写一个
 func Question1Sub3(employees []*Employee) []*Employee {
 	return stream.SliceOf[*Employee](employees...).
-		Map(func(e *Employee) any {
-			if *e.Phone == "" {
-				*e.Phone = fmt.Sprintf("%10d", rand.Int())
+		Convert(func(e *Employee) any {
+			if e.Phone == "" {
+				e.Phone = fmt.Sprintf("%10d", rand.Int())
 			}
 			return e
-		}).Collect(func(data ...any) any { return stream.AnyTo[*Employee](data) }).([]*Employee)
+			// }).Collect(stream.To[any, *Employee](func(t any) *Employee { return t.(*Employee) })).([]*Employee)
+		}).Collect(stream.AnyTo[*Employee]()).([]*Employee)
 }
 
 // - Q4: - 输入 employees ，返回一个map[int][]int，其中 key 为 员工年龄 Age，value 为该年龄段员工ID

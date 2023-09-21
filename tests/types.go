@@ -4,7 +4,7 @@ type Employee struct {
 	ID       int64
 	Name     *string
 	Age      int
-	Phone    *string
+	Phone    string
 	Position *PositionInfo
 }
 

@@ -1,11 +1,16 @@
 package stream
 
-import "github.com/tr1v3r/stream/types"
+import (
+	"reflect"
+
+	"github.com/tr1v3r/stream/types"
+)
 
 var (
 	_ iterator[any] = new(staticIter[any])
 	_ iterator[int] = new(staticIter[int])
 	_ iterator[int] = new(supplyIter[int])
+	_ iterator[any] = new(anyIterator[int])
 )
 
 // iterator 迭代器
@@ -27,6 +32,8 @@ type iterator[T any] interface {
 	CurIndex() int64
 	// Clone return a new iterator with same data
 	Clone() iterator[T]
+	// Concat concat iterators
+	Concat(iters ...iterator[T]) iterator[T]
 }
 
 // newIterator return iterator
@@ -80,26 +87,22 @@ type staticIter[T any] struct {
 	source []T
 }
 
-// Next return next element
-func (iter *staticIter[T]) Next() T {
-	return iter.NextN(1)
-}
-
-// NextN return next n element
-func (iter *staticIter[T]) NextN(n int64) T {
-	return iter.source[iter.nextIndexN(n)]
-}
-
-// Left return all left element
-func (iter *staticIter[T]) Left() (results []T) {
-	for index := iter.nextIndexN(1); index != -1; index = iter.nextIndexN(1) {
-		results = append(results, iter.source[index])
+func (i *staticIter[T]) Next() T         { return i.NextN(1) }
+func (i *staticIter[T]) NextN(n int64) T { return i.source[i.nextIndexN(n)] }
+func (i *staticIter[T]) Left() (results []T) {
+	for index := i.nextIndexN(1); index != -1; index = i.nextIndexN(1) {
+		results = append(results, i.source[index])
 	}
 	return
 }
-
-// Clone return a new iterator with same data
-func (iter staticIter[T]) Clone() iterator[T] { return &iter }
+func (i staticIter[T]) Clone() iterator[T] { return &i }
+func (i staticIter[T]) Concat(iters ...iterator[T]) iterator[T] {
+	for _, iter := range iters {
+		i.source = append(i.source, iter.Left()...)
+		i.size += i.Size()
+	}
+	return &i
+}
 
 type supplyIter[T any] struct {
 	curIndex int64
@@ -120,6 +123,47 @@ func (s *supplyIter[T]) NextN(n int64) T {
 	return s.supply()
 }
 func (s supplyIter[T]) Clone() iterator[T] { return &s }
+func (s supplyIter[T]) Concat(iters ...iterator[T]) iterator[T] {
+	for _, iter := range iters {
+		supply := s.supply
+		s.supply = func() T {
+			if item := supply(); !s.isNil(item) { // return item if not nil
+				return item
+			}
+			return iter.Next()
+		}
+	}
+	return &s
+}
+func (s supplyIter[T]) isNil(t T) bool {
+	v := reflect.ValueOf(t)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Map,
+		reflect.Pointer, reflect.UnsafePointer,
+		reflect.Interface, reflect.Slice:
+		return v.IsNil()
+	}
+	return false
+}
+
+func wrapAny[T any](iter iterator[T]) iterator[any]   { return &anyIterator[T]{iter} }
+func deWrapAny[T any](iter iterator[any]) iterator[T] { return iter.(*anyIterator[T]).iterator }
+
+type anyIterator[T any] struct{ iterator[T] }
+
+func (a *anyIterator[T]) Left() []any {
+	return To[T, any](func(t T) any { return t })(a.iterator.Left()...).([]any)
+}
+func (a *anyIterator[T]) Next() any           { return a.iterator.NextN(1) }
+func (a *anyIterator[T]) NextN(n int64) any   { return a.iterator.NextN(n) }
+func (a anyIterator[T]) Clone() iterator[any] { return &anyIterator[T]{a.iterator.Clone()} }
+func (a anyIterator[T]) Concat(iters ...iterator[any]) iterator[any] {
+	var wrappedIters []iterator[T]
+	for _, iter := range iters {
+		wrappedIters = append(wrappedIters, deWrapAny[T](iter))
+	}
+	return wrapAny(a.iterator.Concat(wrappedIters...))
+}
 
 // Sortable implement sort.Interface
 type Sortable[T any] struct {

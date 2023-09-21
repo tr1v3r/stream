@@ -14,6 +14,19 @@ func Test_Question1(t *testing.T) {
 		{Age: 25},
 		{Age: 26},
 	}))
+
+	results := Question1Sub3([]*Employee{
+		{Age: 18},
+		{Age: 19},
+		{Age: 20},
+		{Age: 21},
+		{Age: 22},
+		{Age: 23},
+		{Age: 24},
+		{Age: 25},
+		{Age: 26},
+	})
+	t.Logf("question 1-3: %+v", results)
 }
 
 func Test_Question3(t *testing.T) {

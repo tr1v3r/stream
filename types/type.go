@@ -4,8 +4,10 @@ type (
 	// Judge judge data, return true when match rule
 	Judge[T any] func(T) bool
 
-	// Mapper convert source from T to R
-	Mapper[T, R any] func(T) R
+	// Mapper convert source from T to T
+	Mapper[T any] func(T) T
+	// Converter convert source from T to R
+	Converter[T, R any] func(T) R
 
 	// Comparator comparator for sort []T
 	// it is a BiFunction, which two input arguments are the type, and returns a int.
