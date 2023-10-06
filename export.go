@@ -27,6 +27,9 @@ type Streamer[T any] interface {
 	// Execute eager execute streamer stage
 	Execute() Streamer[T]
 
+	// Parallel 0 do nothing, 1 async work, 2-n concurrent work
+	Parallel(int) Streamer[T]
+
 	// terminal operate 终止操作
 
 	// ToSlice

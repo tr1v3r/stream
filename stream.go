@@ -39,6 +39,21 @@ func (s *streamer[T]) Append(data ...T) Streamer[T] {
 // Execute eager execute on source
 func (s *streamer[T]) Execute() Streamer[T] { return newStreamer[T](s.stage(s.source)) }
 
+func (s streamer[T]) Parallel(n int) Streamer[T] {
+	if n <= 0 {
+		return &s
+	}
+
+	ch := make(chan T, 1024)
+	go func() {
+		defer close(ch)
+		for source := s.stage(s.source); source.HasNext(); {
+			ch <- source.Next()
+		}
+	}()
+	return newParallelStreamer[T](n, ch)
+}
+
 func (s *streamer[T]) Filter(judge types.Judge[T]) Streamer[T] {
 	return wrapStreamer[T](s.source, func(source iterator[T]) iterator[T] {
 		source, results := s.stage(source), []T{}
@@ -50,20 +65,20 @@ func (s *streamer[T]) Filter(judge types.Judge[T]) Streamer[T] {
 		return newIterator[T](results)
 	})
 }
-func (s *streamer[T]) Map(mapper types.Mapper[T]) Streamer[T] {
+func (s *streamer[T]) Map(m types.Mapper[T]) Streamer[T] {
 	return wrapStreamer[T](s.source, func(source iterator[T]) iterator[T] {
 		source, results := s.stage(source), []T{}
 		for source.HasNext() {
-			results = append(results, mapper(source.Next()))
+			results = append(results, m(source.Next()))
 		}
 		return newIterator[T](results)
 	})
 }
-func (s *streamer[T]) Convert(converter types.Converter[T, any]) Streamer[any] {
+func (s *streamer[T]) Convert(convert types.Converter[T, any]) Streamer[any] {
 	return wrapStreamer[any](wrapAny[T](s.source), func(source iterator[any]) iterator[any] {
 		source, results := wrapAny[T](s.stage(deWrapAny[T](source))), []any{}
 		for source.HasNext() {
-			results = append(results, converter(source.Next().(T)))
+			results = append(results, convert(source.Next().(T)))
 		}
 		return newIterator[any](results)
 	})
@@ -142,7 +157,8 @@ func (s *streamer[T]) Skip(n int64) Streamer[T] {
 	return wrapStreamer[T](s.source, func(source iterator[T]) iterator[T] {
 		source = s.stage(source)
 		source.NextN(n) // skip n
-		return newIterator[T](source.Left())
+		return source
+		// return newIterator[T](source.Left()) Left cannot be called on supply iterator
 	})
 }
 func (s *streamer[T]) Pick(start, end, interval int) Streamer[T] {
@@ -170,15 +186,12 @@ func (s *streamer[T]) Pick(start, end, interval int) Streamer[T] {
 // ============ terminal operate 终止操作 ============
 
 func (s *streamer[T]) Collect(to types.Collector[T]) any {
-	return to(s.stage(s.source).Left()...)
+	return to(s.ToSlice()...)
 }
 func (s *streamer[T]) ForEach(consumer types.Consumer[T]) {
 	for source := s.stage(s.source); source.HasNext(); {
 		consumer(source.Next())
 	}
-}
-func (s *streamer[T]) To(to func([]T) any) any {
-	return to(s.ToSlice())
 }
 func (s *streamer[T]) ToSlice() []T {
 	return s.stage(s.source).Left()
