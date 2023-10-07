@@ -10,13 +10,13 @@ import (
 func TestStream(t *testing.T) {
 	array := []int{4, 1, 3, 3, 2}
 
-	streamer := stream.SliceOf[int](array...).Distinct()
+	streamer := stream.SliceOf(array...).Distinct()
 
 	fmt.Println("distinct: ", streamer.ToSlice())
 	fmt.Println("sort: ", streamer.Sort(func(l, r int) int { return l - r }).ToSlice())
 	fmt.Println("reverse sort: ", streamer.ReverseSort(func(l, r int) int { return l - r }).ToSlice())
 
-	result := stream.SliceOf[int](array...).
+	result := stream.SliceOf(array...).
 		Convert(func(i int) any { return float64(i + 1) }).
 		Reduce(func(result, data any) any {
 			if result == nil {
@@ -26,17 +26,17 @@ func TestStream(t *testing.T) {
 		}).(float64)
 	fmt.Println("result: ", result)
 
-	stream.SliceOf[int](array...).
+	stream.SliceOf(array...).
 		Convert(func(i int) any { return float64(i + 1) }).
 		ForEach(func(data ...any) { fmt.Println(data...) })
 
-	floatResult := stream.SliceOf[int](array...).
+	floatResult := stream.SliceOf(array...).
 		Convert(func(i int) any { return float64(i + 1) }).Collect(func(data ...any) any {
 		var floats []float64
 		for _, item := range data {
 			floats = append(floats, item.(float64))
 		}
-		return stream.SliceOf[float64](floats...)
+		return stream.SliceOf(floats...)
 	}).(stream.Streamer[float64]).ReduceFrom(99.99, func(result, data float64) float64 {
 		return result + data
 	})
@@ -45,7 +45,7 @@ func TestStream(t *testing.T) {
 
 func TestStream_1(t *testing.T) {
 	array := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
-	stage := stream.SliceOf[int](array...)
+	stage := stream.SliceOf(array...)
 	fmt.Println("stream First: ", stage.First())
 	fmt.Println("stream Take: ", stage.Take())
 	fmt.Println("stream Last: ", stage.Last())
@@ -63,5 +63,5 @@ func TestStream_1(t *testing.T) {
 	fmt.Println("stream Reduce sum: ", result)
 
 	// var x []any = []any{"hello", "world"}
-	// stream.SliceOf[string](x.([]string))
+	// stream.SliceOf(x.([]string))
 }
