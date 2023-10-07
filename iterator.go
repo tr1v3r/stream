@@ -105,8 +105,9 @@ func (i staticIter[T]) Concat(iters ...iterator[T]) iterator[T] {
 			}}).Concat(iters[index:]...)
 		}
 
-		i.source = append(i.source, iter.Left()...)
-		i.size += i.Size()
+		data := iter.Left()
+		i.size += int64(len(data))
+		i.source = append(i.source, data...)
 	}
 	return &i
 }
