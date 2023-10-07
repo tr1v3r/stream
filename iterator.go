@@ -1,8 +1,6 @@
 package stream
 
 import (
-	"reflect"
-
 	"github.com/tr1v3r/stream/types"
 )
 
@@ -97,7 +95,16 @@ func (i *staticIter[T]) Left() (results []T) {
 }
 func (i staticIter[T]) Clone() iterator[T] { return &i }
 func (i staticIter[T]) Concat(iters ...iterator[T]) iterator[T] {
-	for _, iter := range iters {
+	for index, iter := range iters {
+		if iter.Size() < 0 {
+			return (&supplyIter[T]{supply: func() (t T, ok bool) {
+				for iter.HasNext() {
+					return iter.Next(), true
+				}
+				return t, false
+			}}).Concat(iters[index:]...)
+		}
+
 		i.source = append(i.source, iter.Left()...)
 		i.size += i.Size()
 	}
@@ -120,30 +127,24 @@ func (s *supplyIter[T]) NextN(n int64) T {
 	for i := 0; i < int(n)-1; i++ {
 		s.supply()
 	}
-	return s.supply()
+	t, _ := s.supply()
+	return t
 }
 func (s supplyIter[T]) Clone() iterator[T] { return &s }
 func (s supplyIter[T]) Concat(iters ...iterator[T]) iterator[T] {
 	for _, iter := range iters {
 		supply := s.supply
-		s.supply = func() T {
-			if item := supply(); !s.isNil(item) { // return item if not nil
-				return item
+		s.supply = func() (t T, ok bool) {
+			if item, ok := supply(); ok { // return supply not finished
+				return item, true
 			}
-			return iter.Next()
+			for iter.HasNext() {
+				return iter.Next(), true
+			}
+			return t, false
 		}
 	}
 	return &s
-}
-func (s supplyIter[T]) isNil(t T) bool {
-	v := reflect.ValueOf(t)
-	switch v.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Map,
-		reflect.Pointer, reflect.UnsafePointer,
-		reflect.Interface, reflect.Slice:
-		return v.IsNil()
-	}
-	return false
 }
 
 func wrapAny[T any](iter iterator[T]) iterator[any]   { return &anyIterator[T]{iter} }

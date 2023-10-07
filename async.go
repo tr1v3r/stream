@@ -8,22 +8,28 @@ import (
 )
 
 var (
-	_ Streamer[any]     = &asyncStreamer[any]{}
-	_ Streamer[float64] = &asyncStreamer[float64]{}
+	_ Streamer[any]     = newAsyncStreamer[any](1, nil)
+	_ Streamer[float64] = newAsyncStreamer[float64](1, nil)
 )
 
-func newParallelStreamer[T any](parallelSize int, ch <-chan T) *asyncStreamer[T] {
-	return &asyncStreamer[T]{parallelSize: parallelSize, ch: ch}
+type asyncStage[T any] func() <-chan T
+
+func newAsyncStreamer[T any](parallelSize int, ch <-chan T) *asyncStreamer[T] {
+	return &asyncStreamer[T]{parallelSize: parallelSize, stage: func() <-chan T { return ch }}
+}
+
+func wrapAsyncStreamer[T any](parallelSize int, stage asyncStage[T]) *asyncStreamer[T] {
+	return &asyncStreamer[T]{parallelSize: parallelSize, stage: stage}
 }
 
 // asyncStreamer underlying p streamer implement for Streamer
 type asyncStreamer[T any] struct {
 	parallelSize int
-	ch           <-chan T
+	stage        asyncStage[T]
 }
 
 func (s *asyncStreamer[T]) Append(data ...T) Streamer[T] { return s.sync().Append(data...) }
-func (s *asyncStreamer[T]) Execute() Streamer[T]         { return s.sync() }
+func (s *asyncStreamer[T]) Execute() Streamer[T]         { return s.sync().Execute() }
 func (s *asyncStreamer[T]) Parallel(n int) Streamer[T] {
 	if n <= 0 {
 		return s.sync()
@@ -33,70 +39,44 @@ func (s *asyncStreamer[T]) Parallel(n int) Streamer[T] {
 }
 
 func (s *asyncStreamer[T]) Filter(judge types.Judge[T]) Streamer[T] {
-	ch, pool := make(chan T, 1024), pools.NewPool(s.parallelSize)
-	go func() {
-		defer close(ch)
-		for t := range s.ch {
-			pool.Wait()
-			go func(t T) {
-				defer pool.Done()
-				if judge(t) {
-					ch <- t
-				}
-			}(t)
+	return wrapAsyncStreamer[T](s.parallelSize, s.wrapAsyncStage(func(t T, ch chan<- T) {
+		if judge(t) {
+			ch <- t
 		}
-		pool.WaitAll()
-	}()
-	return &asyncStreamer[T]{ch: ch, parallelSize: s.parallelSize}
+	}))
 }
 func (s *asyncStreamer[T]) Map(m types.Mapper[T]) Streamer[T] {
-	ch, pool := make(chan T, 1024), pools.NewPool(s.parallelSize)
-	go func() {
-		defer close(ch)
-		for t := range s.ch {
-			pool.Wait()
-			go func(t T) {
-				defer pool.Done()
-				ch <- m(t)
-			}(t)
-		}
-		pool.WaitAll()
-	}()
-	return &asyncStreamer[T]{ch: ch, parallelSize: s.parallelSize}
-}
-func (s *asyncStreamer[T]) Convert(convert types.Converter[T, any]) Streamer[any] {
-	ch, pool := make(chan any, 1024), pools.NewPool(s.parallelSize)
-	go func() {
-		defer close(ch)
-		for t := range s.ch {
-			pool.Wait()
-			go func(t T) {
-				defer pool.Done()
-				ch <- convert(t)
-			}(t)
-		}
-		pool.WaitAll()
-	}()
-	return &asyncStreamer[any]{ch: ch, parallelSize: s.parallelSize}
+	return wrapAsyncStreamer[T](s.parallelSize, s.wrapAsyncStage(func(t T, ch chan<- T) {
+		ch <- m(t)
+	}))
 }
 func (s *asyncStreamer[T]) Peek(consumer types.Consumer[T]) Streamer[T] {
-	ch, pool := make(chan T, 1024), pools.NewPool(s.parallelSize)
-	go func() {
-		defer close(ch)
-		for t := range s.ch {
-			pool.Wait()
-			go func(t T) {
-				defer pool.Done()
-				consumer(t)
-				ch <- t
-			}(t)
-		}
-		pool.WaitAll()
-	}()
-	return &asyncStreamer[T]{ch: ch, parallelSize: s.parallelSize}
+	return wrapAsyncStreamer[T](s.parallelSize, s.wrapAsyncStage(func(t T, ch chan<- T) {
+		consumer(t)
+		ch <- t
+	}))
 }
 
-func (s *asyncStreamer[T]) Distinct() Streamer[T] { return s.sync().Distinct() }
+func (s *asyncStreamer[T]) Convert(convert types.Converter[T, any]) Streamer[any] {
+	return wrapAsyncStreamer[any](s.parallelSize, func() <-chan any {
+		ch := make(chan any, 1024)
+		go func(size int) {
+			defer close(ch)
+			pool := pools.NewPool(size)
+			for t := range s.stage() {
+				pool.Wait()
+				go func(t T) {
+					defer pool.Done()
+					ch <- convert(t)
+				}(t)
+			}
+			pool.WaitAll()
+		}(s.parallelSize)
+		return ch
+	})
+}
+
+func (s *asyncStreamer[T]) Distinct() Streamer[T] { return s.Filter(distinctJudge[T]()) }
 func (s *asyncStreamer[T]) Sort(comparator types.Comparator[T]) Streamer[T] {
 	return s.sync().Sort(comparator)
 }
@@ -109,12 +89,13 @@ func (s *asyncStreamer[T]) Skip(n int64) Streamer[T]  { return s.sync().Skip(n) 
 func (s *asyncStreamer[T]) Pick(start, end, interval int) Streamer[T] {
 	return s.sync().Pick(start, end, interval)
 }
+
 func (s *asyncStreamer[T]) Collect(to types.Collector[T]) any { return s.sync().Collect(to) }
 
 func (s *asyncStreamer[T]) ForEach(consumer types.Consumer[T]) {
 	pool := pools.NewPool(s.parallelSize)
 	go func() {
-		for t := range s.ch {
+		for t := range s.stage() {
 			pool.Wait()
 			go func(t T) {
 				defer pool.Done()
@@ -126,7 +107,7 @@ func (s *asyncStreamer[T]) ForEach(consumer types.Consumer[T]) {
 }
 func (s *asyncStreamer[T]) ToSlice() []T { return s.fetchAll() }
 func (s *asyncStreamer[T]) AllMatch(judge types.Judge[T]) bool {
-	for t := range s.ch {
+	for t := range s.stage() {
 		if !judge(t) {
 			return false
 		}
@@ -134,7 +115,7 @@ func (s *asyncStreamer[T]) AllMatch(judge types.Judge[T]) bool {
 	return true
 }
 func (s *asyncStreamer[T]) NonMatch(judge types.Judge[T]) bool {
-	for t := range s.ch {
+	for t := range s.stage() {
 		if judge(t) {
 			return false
 		}
@@ -142,7 +123,7 @@ func (s *asyncStreamer[T]) NonMatch(judge types.Judge[T]) bool {
 	return true
 }
 func (s *asyncStreamer[T]) AnyMatch(judge types.Judge[T]) bool {
-	for t := range s.ch {
+	for t := range s.stage() {
 		if judge(t) {
 			return true
 		}
@@ -151,21 +132,21 @@ func (s *asyncStreamer[T]) AnyMatch(judge types.Judge[T]) bool {
 }
 func (s *asyncStreamer[T]) Reduce(accumulator types.BinaryOperator[T]) T {
 	var result T
-	for t := range s.ch {
+	for t := range s.stage() {
 		result = accumulator(result, t)
 	}
 	return result
 }
 func (s *asyncStreamer[T]) ReduceFrom(initValue T, accumulator types.BinaryOperator[T]) T {
 	var result T = initValue
-	for t := range s.ch {
+	for t := range s.stage() {
 		result = accumulator(result, t)
 	}
 	return result
 }
 func (s *asyncStreamer[T]) ReduceWith(initValue any, accumulator types.Accumulator[T, any]) any {
 	var result = initValue
-	for t := range s.ch {
+	for t := range s.stage() {
 		result = accumulator(result, t)
 	}
 	return result
@@ -174,7 +155,7 @@ func (s *asyncStreamer[T]) ReduceBy(initValueBulider func(sizeMayNegative int) a
 	return s.sync().ReduceBy(initValueBulider, accumulator)
 }
 
-func (s *asyncStreamer[T]) First() T { return <-s.ch }
+func (s *asyncStreamer[T]) First() T { return <-s.stage() }
 func (s *asyncStreamer[T]) Take() T {
 	data := s.fetchAll()
 	return data[rand.Intn(len(data))]
@@ -187,11 +168,30 @@ func (s *asyncStreamer[T]) Last() T {
 func (s *asyncStreamer[T]) Count() int64 { return s.sync().Count() }
 
 func (s *asyncStreamer[T]) sync() Streamer[T] {
-	return newStreamer[T](newIterator[T](s.fetchAll()))
+	return wrapStreamer[T](newIterator[T](nil), func(iter iterator[T]) iterator[T] { return iter.Concat(newIterator[T](s.fetchAll())) })
 }
 func (s *asyncStreamer[T]) fetchAll() (source []T) {
-	for t := range s.ch {
+	for t := range s.stage() {
 		source = append(source, t)
 	}
 	return source
+}
+
+func (s *asyncStreamer[T]) wrapAsyncStage(work func(T, chan<- T)) asyncStage[T] {
+	return func() <-chan T {
+		ch := make(chan T, 1024)
+		go func(size int) {
+			defer close(ch)
+			pool := pools.NewPool(size)
+			for t := range s.stage() {
+				pool.Wait()
+				go func(t T) {
+					defer pool.Done()
+					work(t, ch)
+				}(t)
+			}
+			pool.WaitAll()
+		}(s.parallelSize)
+		return ch
+	}
 }

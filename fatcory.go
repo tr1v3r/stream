@@ -14,7 +14,7 @@ func Of[T any](supply types.Supplier[T]) Streamer[T] {
 
 // Repeat create a new stream with unlimit repeated data items
 func Repeat[T any](t T) Streamer[T] {
-	return newStreamer[T](&supplyIter[T]{supply: func() T { return t }})
+	return newStreamer[T](&supplyIter[T]{supply: func() (T, bool) { return t, true }})
 }
 
 // RepeatN create a new stream with n times repeated data items

@@ -1,7 +1,6 @@
 package stream
 
 import (
-	"fmt"
 	"math/rand"
 	"sort"
 
@@ -43,15 +42,16 @@ func (s streamer[T]) Parallel(n int) Streamer[T] {
 	if n <= 0 {
 		return &s
 	}
-
-	ch := make(chan T, 1024)
-	go func() {
-		defer close(ch)
-		for source := s.stage(s.source); source.HasNext(); {
-			ch <- source.Next()
-		}
-	}()
-	return newParallelStreamer[T](n, ch)
+	return wrapAsyncStreamer[T](n, func() <-chan T {
+		ch := make(chan T, 1024)
+		go func() {
+			defer close(ch)
+			for source := s.stage(s.source); source.HasNext(); {
+				ch <- source.Next()
+			}
+		}()
+		return ch
+	})
 }
 
 func (s *streamer[T]) Filter(judge types.Judge[T]) Streamer[T] {
@@ -93,27 +93,7 @@ func (s *streamer[T]) Peek(consumer types.Consumer[T]) Streamer[T] {
 	})
 }
 
-func (s *streamer[T]) Distinct() Streamer[T] {
-	return wrapStreamer[T](s.source, func(source iterator[T]) iterator[T] {
-		source, results, keyMap := s.stage(source), []T{}, map[string]T{}
-		for source.HasNext() {
-			item := source.Next()
-
-			var key string
-			if keyer, ok := any(item).(types.Unique); ok {
-				key = keyer.Key()
-			} else {
-				key = fmt.Sprint(item)
-			}
-
-			if _, ok := keyMap[key]; !ok {
-				keyMap[key] = item
-				results = append(results, item)
-			}
-		}
-		return newIterator[T](results)
-	})
-}
+func (s *streamer[T]) Distinct() Streamer[T] { return s.Filter(distinctJudge[T]()) }
 func (s *streamer[T]) Sort(comparator types.Comparator[T]) Streamer[T] {
 	return wrapStreamer[T](s.source, func(source iterator[T]) iterator[T] {
 		source, results := s.stage(source), []T{}
