@@ -87,7 +87,9 @@ func (s *streamer[T]) Peek(consumer types.Consumer[T]) Streamer[T] {
 	return wrapStreamer[T](s.source, func(source iterator[T]) iterator[T] {
 		source, results := s.stage(source), []T{}
 		for source.HasNext() {
-			consumer(source.Next())
+			item := source.Next()
+			consumer(item)
+			results = append(results, item)
 		}
 		return newIterator[T](results)
 	})

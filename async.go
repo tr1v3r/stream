@@ -94,16 +94,14 @@ func (s *asyncStreamer[T]) Collect(to types.Collector[T]) any { return s.sync().
 
 func (s *asyncStreamer[T]) ForEach(consumer types.Consumer[T]) {
 	pool := pools.NewPool(s.parallelSize)
-	go func() {
-		for t := range s.stage() {
-			pool.Wait()
-			go func(t T) {
-				defer pool.Done()
-				consumer(t)
-			}(t)
-		}
-		pool.WaitAll()
-	}()
+	for t := range s.stage() {
+		pool.Wait()
+		go func(t T) {
+			defer pool.Done()
+			consumer(t)
+		}(t)
+	}
+	pool.WaitAll()
 }
 func (s *asyncStreamer[T]) ToSlice() []T { return s.fetchAll() }
 func (s *asyncStreamer[T]) AllMatch(judge types.Judge[T]) bool {
