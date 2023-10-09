@@ -158,6 +158,7 @@ func (s *asyncStreamer[T]) Take() T {
 	data := s.fetchAll()
 	return data[rand.Intn(len(data))]
 }
+func (s *asyncStreamer[T]) Any() T { return s.Take() }
 func (s *asyncStreamer[T]) Last() T {
 	data := s.fetchAll()
 	return data[len(data)-1]

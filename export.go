@@ -51,6 +51,7 @@ type Streamer[T any] interface {
 	// Pick one
 	First() T
 	Take() T
+	Any() T
 	Last() T
 	// Cout return count result
 	Count() int64

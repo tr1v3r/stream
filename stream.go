@@ -236,6 +236,7 @@ func (s *streamer[T]) Take() T {
 	source := s.stage(s.source)
 	return source.NextN(rand.Int63n(source.Size()) + 1)
 }
+func (s *streamer[T]) Any() T { return s.Take() }
 func (s *streamer[T]) Last() T {
 	source := s.stage(s.source)
 	return source.NextN(source.Size())
