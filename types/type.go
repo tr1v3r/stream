@@ -16,7 +16,7 @@ type (
 	Comparator[T any] func(left T, right T) int
 
 	// Consumer consume T
-	Consumer[T any] func(...T)
+	Consumer[T any] func(T)
 
 	// BinaryOperator operate two data T
 	BinaryOperator[T any] func(T, T) T
