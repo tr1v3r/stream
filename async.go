@@ -16,11 +16,11 @@ var (
 type asyncStage[T any] func() <-chan T
 
 func newAsyncStreamer[T any](parallelSize int, ch <-chan T) *asyncStreamer[T] {
-	return &asyncStreamer[T]{parallelSize: parallelSize, stage: func() <-chan T { return ch }}
+	return &asyncStreamer[T]{ctx: ctx, parallelSize: parallelSize, stage: func() <-chan T { return ch }}
 }
 
 func wrapAsyncStreamer[T any](parallelSize int, stage asyncStage[T]) *asyncStreamer[T] {
-	return &asyncStreamer[T]{parallelSize: parallelSize, stage: stage}
+	return &asyncStreamer[T]{ctx: ctx, parallelSize: parallelSize, stage: stage}
 }
 
 // asyncStreamer underlying p streamer implement for Streamer

@@ -13,16 +13,18 @@ var (
 	_ Streamer[float64] = newStreamer[float64](nil)
 )
 
+var ctx = context.Background()
+
 type stage[T any] func(iterator[T]) iterator[T]
 
 // newStreamer return streamer
 func newStreamer[T any](iter iterator[T]) *streamer[T] {
-	return &streamer[T]{source: iter, stage: func(iter iterator[T]) iterator[T] { return iter }}
+	return &streamer[T]{ctx: ctx, source: iter, stage: func(iter iterator[T]) iterator[T] { return iter }}
 }
 
 // wrapStreamer wrap stage to new streamer
 func wrapStreamer[T any](source iterator[T], stage stage[T]) *streamer[T] {
-	return &streamer[T]{source: source, stage: stage}
+	return &streamer[T]{ctx: ctx, source: source, stage: stage}
 }
 
 // streamer underlying streamer implement for Streamer
