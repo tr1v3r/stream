@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"context"
 	"math/rand"
 	"sort"
 
@@ -26,17 +27,29 @@ func wrapStreamer[T any](source iterator[T], stage stage[T]) *streamer[T] {
 
 // streamer underlying streamer implement for Streamer
 type streamer[T any] struct {
+	ctx context.Context
+
 	source iterator[T]
 	stage  stage[T]
 }
 
+// WithContext set stream context
+func (s streamer[T]) WithContext(ctx context.Context) Streamer[T] {
+	s.ctx = ctx
+	return &s
+}
+
+func (s *streamer[T]) cancelled() bool { return s.ctx.Err() != nil }
+
 // Append append data to streamer source
 func (s *streamer[T]) Append(data ...T) Streamer[T] {
-	return newStreamer[T](s.source.Concat(newIterator[T](data)))
+	return newStreamer[T](s.source.Concat(newIterator[T](data))).WithContext(s.ctx)
 }
 
 // Execute eager execute on source
-func (s *streamer[T]) Execute() Streamer[T] { return newStreamer[T](s.stage(s.source)) }
+func (s *streamer[T]) Execute() Streamer[T] {
+	return newStreamer[T](s.stage(s.source)).WithContext(s.ctx)
+}
 
 func (s streamer[T]) Parallel(n int) Streamer[T] {
 	if n <= 0 {
@@ -46,94 +59,93 @@ func (s streamer[T]) Parallel(n int) Streamer[T] {
 		ch := make(chan T, 1024)
 		go func() {
 			defer close(ch)
-			for source := s.stage(s.source); source.HasNext(); {
+			for source := s.stage(s.source); !s.cancelled() && source.HasNext(); {
 				ch <- source.Next()
 			}
 		}()
 		return ch
-	})
+	}).WithContext(s.ctx)
 }
 
 func (s *streamer[T]) Filter(judge types.Judge[T]) Streamer[T] {
 	return wrapStreamer[T](s.source, func(source iterator[T]) iterator[T] {
 		source, results := s.stage(source), []T{}
-		for source.HasNext() {
+		for !s.cancelled() && source.HasNext() {
 			if item := source.Next(); judge(item) {
 				results = append(results, item)
 			}
 		}
 		return newIterator[T](results)
-	})
+	}).WithContext(s.ctx)
 }
 func (s *streamer[T]) Map(m types.Mapper[T]) Streamer[T] {
 	return wrapStreamer[T](s.source, func(source iterator[T]) iterator[T] {
 		source, results := s.stage(source), []T{}
-		for source.HasNext() {
+		for !s.cancelled() && source.HasNext() {
 			results = append(results, m(source.Next()))
 		}
 		return newIterator[T](results)
-	})
+	}).WithContext(s.ctx)
 }
 func (s *streamer[T]) Convert(convert types.Converter[T, any]) Streamer[any] {
 	return wrapStreamer[any](wrapAny[T](s.source), func(source iterator[any]) iterator[any] {
 		source, results := wrapAny[T](s.stage(deWrapAny[T](source))), []any{}
-		for source.HasNext() {
+		for !s.cancelled() && source.HasNext() {
 			results = append(results, convert(source.Next().(T)))
 		}
 		return newIterator[any](results)
-	})
+	}).WithContext(s.ctx)
 }
 func (s *streamer[T]) Peek(consumer types.Consumer[T]) Streamer[T] {
 	return wrapStreamer[T](s.source, func(source iterator[T]) iterator[T] {
 		source, results := s.stage(source), []T{}
-		for source.HasNext() {
+		for !s.cancelled() && source.HasNext() {
 			item := source.Next()
 			consumer(item)
 			results = append(results, item)
 		}
 		return newIterator[T](results)
-	})
+	}).WithContext(s.ctx)
 }
 
 func (s *streamer[T]) Distinct() Streamer[T] { return s.Filter(distinctJudge[T]()) }
 func (s *streamer[T]) Sort(comparator types.Comparator[T]) Streamer[T] {
 	return wrapStreamer[T](s.source, func(source iterator[T]) iterator[T] {
 		source, results := s.stage(source), []T{}
-		for source.HasNext() {
+		for !s.cancelled() && source.HasNext() {
 			results = append(results, source.Next())
 		}
 		sort.Sort(&Sortable[T]{List: results, Cmp: comparator})
 		return newIterator[T](results)
-	})
+	}).WithContext(s.ctx)
 }
 func (s *streamer[T]) ReverseSort(comparator types.Comparator[T]) Streamer[T] {
 	return wrapStreamer[T](s.source, func(source iterator[T]) iterator[T] {
 		source, results := s.stage(source), []T{}
-		for source.HasNext() {
+		for !s.cancelled() && source.HasNext() {
 			results = append(results, source.Next())
 		}
 		sort.Sort(sort.Reverse(&Sortable[T]{List: results, Cmp: comparator}))
 		return newIterator[T](results)
-	})
+	}).WithContext(s.ctx)
 }
 func (s *streamer[T]) Reverse() Streamer[T] {
 	return wrapStreamer[T](s.source, func(source iterator[T]) iterator[T] {
-		source = s.stage(source)
-		results := source.Left()
+		results := s.stage(source).Left()
 		for i, length := 0, len(results)-1; i <= length/2; i++ {
 			results[i], results[length-i] = results[length-i], results[i]
 		}
 		return newIterator[T](results)
-	})
+	}).WithContext(s.ctx)
 }
 func (s *streamer[T]) Limit(l int64) Streamer[T] {
 	return wrapStreamer[T](s.source, func(source iterator[T]) iterator[T] {
 		source, results := s.stage(source), []T{}
-		for i := 0; i < int(l) && source.HasNext(); i++ {
+		for i := 0; i < int(l) && !s.cancelled() && source.HasNext(); i++ {
 			results = append(results, source.Next())
 		}
 		return newIterator[T](results)
-	})
+	}).WithContext(s.ctx)
 }
 func (s *streamer[T]) Skip(n int64) Streamer[T] {
 	return wrapStreamer[T](s.source, func(source iterator[T]) iterator[T] {
@@ -141,7 +153,7 @@ func (s *streamer[T]) Skip(n int64) Streamer[T] {
 		source.NextN(n) // skip n
 		return source
 		// return newIterator[T](source.Left()) Left cannot be called on supply iterator
-	})
+	}).WithContext(s.ctx)
 }
 func (s *streamer[T]) Pick(start, end, interval int) Streamer[T] {
 	return wrapStreamer[T](s.source, func(source iterator[T]) iterator[T] {
@@ -158,11 +170,11 @@ func (s *streamer[T]) Pick(start, end, interval int) Streamer[T] {
 		}
 
 		results = append(results, source.NextN(int64(start+1))) // pick first
-		for source.CurIndex()+int64(interval)-1 <= int64(end) && source.HasNextN(int64(interval)) {
+		for !s.cancelled() && source.CurIndex()+int64(interval)-1 <= int64(end) && source.HasNextN(int64(interval)) {
 			results = append(results, source.NextN(int64(interval)))
 		}
 		return newIterator[T](results)
-	})
+	}).WithContext(s.ctx)
 }
 
 // ============ terminal operate 终止操作 ============
@@ -171,7 +183,7 @@ func (s *streamer[T]) Collect(to types.Collector[T]) any {
 	return to(s.ToSlice()...)
 }
 func (s *streamer[T]) ForEach(consumer types.Consumer[T]) {
-	for source := s.stage(s.source); source.HasNext(); {
+	for source := s.stage(s.source); !s.cancelled() && source.HasNext(); {
 		consumer(source.Next())
 	}
 }
@@ -179,7 +191,7 @@ func (s *streamer[T]) ToSlice() []T {
 	return s.stage(s.source).Left()
 }
 func (s *streamer[T]) AllMatch(judge types.Judge[T]) bool {
-	for source := s.stage(s.source); source.HasNext(); {
+	for source := s.stage(s.source); !s.cancelled() && source.HasNext(); {
 		if item := source.Next(); !judge(item) {
 			return false
 		}
@@ -187,7 +199,7 @@ func (s *streamer[T]) AllMatch(judge types.Judge[T]) bool {
 	return true
 }
 func (s *streamer[T]) NonMatch(judge types.Judge[T]) bool {
-	for source := s.stage(s.source); source.HasNext(); {
+	for source := s.stage(s.source); !s.cancelled() && source.HasNext(); {
 		if item := source.Next(); judge(item) {
 			return false
 		}
@@ -195,7 +207,7 @@ func (s *streamer[T]) NonMatch(judge types.Judge[T]) bool {
 	return true
 }
 func (s *streamer[T]) AnyMatch(judge types.Judge[T]) bool {
-	for source := s.stage(s.source); source.HasNext(); {
+	for source := s.stage(s.source); !s.cancelled() && source.HasNext(); {
 		if item := source.Next(); judge(item) {
 			return true
 		}
@@ -204,21 +216,21 @@ func (s *streamer[T]) AnyMatch(judge types.Judge[T]) bool {
 }
 func (s *streamer[T]) Reduce(accumulator types.BinaryOperator[T]) T {
 	var result T
-	for source := s.stage(s.source); source.HasNext(); {
+	for source := s.stage(s.source); !s.cancelled() && source.HasNext(); {
 		result = accumulator(result, source.Next())
 	}
 	return result
 }
 func (s *streamer[T]) ReduceFrom(initValue T, accumulator types.BinaryOperator[T]) T {
 	var result T = initValue
-	for source := s.stage(s.source); source.HasNext(); {
+	for source := s.stage(s.source); !s.cancelled() && source.HasNext(); {
 		result = accumulator(result, source.Next())
 	}
 	return result
 }
 func (s *streamer[T]) ReduceWith(initValue any, accumulator types.Accumulator[T, any]) any {
-	var result = initValue
-	for source := s.stage(s.source); source.HasNext(); {
+	var result any = initValue
+	for source := s.stage(s.source); !s.cancelled() && source.HasNext(); {
 		result = accumulator(result, source.Next())
 	}
 	return result
@@ -226,7 +238,7 @@ func (s *streamer[T]) ReduceWith(initValue any, accumulator types.Accumulator[T,
 func (s *streamer[T]) ReduceBy(initValueBulider func(sizeMayNegative int) any, accumulator types.Accumulator[T, any]) any {
 	source := s.stage(s.source)
 	result := initValueBulider(int(source.Size()))
-	for source.HasNext() {
+	for !s.cancelled() && source.HasNext() {
 		result = accumulator(result, source.Next())
 	}
 	return result

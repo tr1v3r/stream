@@ -1,8 +1,15 @@
 package stream
 
-import "github.com/tr1v3r/stream/types"
+import (
+	"context"
+
+	"github.com/tr1v3r/stream/types"
+)
 
 type Streamer[T any] interface {
+	// WithContext set Streamer context
+	WithContext(context.Context) Streamer[T]
+
 	// stateless operate 无状态操作
 
 	// Filter filter data by Judge result

@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"context"
 	"math/rand"
 
 	"github.com/tr1v3r/pkg/pools"
@@ -24,9 +25,18 @@ func wrapAsyncStreamer[T any](parallelSize int, stage asyncStage[T]) *asyncStrea
 
 // asyncStreamer underlying p streamer implement for Streamer
 type asyncStreamer[T any] struct {
+	ctx context.Context
+
 	parallelSize int
 	stage        asyncStage[T]
 }
+
+func (s asyncStreamer[T]) WithContext(ctx context.Context) Streamer[T] {
+	s.ctx = ctx
+	return &s
+}
+
+func (s *asyncStreamer[T]) cancelled() bool { return s.ctx.Err() != nil }
 
 func (s *asyncStreamer[T]) Append(data ...T) Streamer[T] { return s.sync().Append(data...) }
 func (s *asyncStreamer[T]) Execute() Streamer[T]         { return s.sync().Execute() }
@@ -43,18 +53,18 @@ func (s *asyncStreamer[T]) Filter(judge types.Judge[T]) Streamer[T] {
 		if judge(t) {
 			ch <- t
 		}
-	}))
+	})).WithContext(s.ctx)
 }
 func (s *asyncStreamer[T]) Map(m types.Mapper[T]) Streamer[T] {
 	return wrapAsyncStreamer[T](s.parallelSize, s.wrapAsyncStage(func(t T, ch chan<- T) {
 		ch <- m(t)
-	}))
+	})).WithContext(s.ctx)
 }
 func (s *asyncStreamer[T]) Peek(consumer types.Consumer[T]) Streamer[T] {
 	return wrapAsyncStreamer[T](s.parallelSize, s.wrapAsyncStage(func(t T, ch chan<- T) {
 		consumer(t)
 		ch <- t
-	}))
+	})).WithContext(s.ctx)
 }
 
 func (s *asyncStreamer[T]) Convert(convert types.Converter[T, any]) Streamer[any] {
@@ -73,7 +83,7 @@ func (s *asyncStreamer[T]) Convert(convert types.Converter[T, any]) Streamer[any
 			pool.WaitAll()
 		}(s.parallelSize)
 		return ch
-	})
+	}).WithContext(s.ctx)
 }
 
 func (s *asyncStreamer[T]) Distinct() Streamer[T] { return s.Filter(distinctJudge[T]()) }
@@ -95,6 +105,10 @@ func (s *asyncStreamer[T]) Collect(to types.Collector[T]) any { return s.sync().
 func (s *asyncStreamer[T]) ForEach(consumer types.Consumer[T]) {
 	pool := pools.NewPool(s.parallelSize)
 	for t := range s.stage() {
+		if s.cancelled() {
+			return
+		}
+
 		pool.Wait()
 		go func(t T) {
 			defer pool.Done()
@@ -104,46 +118,40 @@ func (s *asyncStreamer[T]) ForEach(consumer types.Consumer[T]) {
 	pool.WaitAll()
 }
 func (s *asyncStreamer[T]) ToSlice() []T { return s.fetchAll() }
+
 func (s *asyncStreamer[T]) AllMatch(judge types.Judge[T]) bool {
-	for t := range s.stage() {
-		if !judge(t) {
-			return false
-		}
-	}
-	return true
+	return s.match(func(t T) bool { return !judge(t) }, false)
 }
 func (s *asyncStreamer[T]) NonMatch(judge types.Judge[T]) bool {
-	for t := range s.stage() {
-		if judge(t) {
-			return false
-		}
-	}
-	return true
+	return s.match(judge, false)
 }
 func (s *asyncStreamer[T]) AnyMatch(judge types.Judge[T]) bool {
+	return s.match(judge, true)
+}
+func (s *asyncStreamer[T]) match(judge types.Judge[T], result bool) bool {
 	for t := range s.stage() {
-		if judge(t) {
-			return true
+		if s.cancelled() || judge(t) {
+			return result
 		}
 	}
-	return false
+	return !result
 }
-func (s *asyncStreamer[T]) Reduce(accumulator types.BinaryOperator[T]) T {
-	var result T
-	for t := range s.stage() {
-		result = accumulator(result, t)
-	}
-	return result
+
+func (s *asyncStreamer[T]) Reduce(accumulator types.BinaryOperator[T]) (result T) {
+	return s.ReduceFrom(result, accumulator)
 }
 func (s *asyncStreamer[T]) ReduceFrom(initValue T, accumulator types.BinaryOperator[T]) T {
 	var result T = initValue
 	for t := range s.stage() {
+		if s.cancelled() {
+			return result
+		}
 		result = accumulator(result, t)
 	}
 	return result
 }
 func (s *asyncStreamer[T]) ReduceWith(initValue any, accumulator types.Accumulator[T, any]) any {
-	var result = initValue
+	var result any = initValue
 	for t := range s.stage() {
 		result = accumulator(result, t)
 	}
@@ -167,10 +175,13 @@ func (s *asyncStreamer[T]) Last() T {
 func (s *asyncStreamer[T]) Count() int64 { return s.sync().Count() }
 
 func (s *asyncStreamer[T]) sync() Streamer[T] {
-	return wrapStreamer[T](newIterator[T](nil), func(iter iterator[T]) iterator[T] { return iter.Concat(newIterator[T](s.fetchAll())) })
+	return wrapStreamer[T](newIterator[T](nil), func(iter iterator[T]) iterator[T] { return iter.Concat(newIterator[T](s.fetchAll())) }).WithContext(s.ctx)
 }
 func (s *asyncStreamer[T]) fetchAll() (source []T) {
 	for t := range s.stage() {
+		if s.cancelled() {
+			return source
+		}
 		source = append(source, t)
 	}
 	return source

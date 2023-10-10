@@ -8,7 +8,8 @@ var (
 	_ iterator[any] = new(staticIter[any])
 	_ iterator[int] = new(staticIter[int])
 	_ iterator[int] = new(supplyIter[int])
-	_ iterator[any] = new(anyIterator[int])
+	_ iterator[any] = new(anyIter[int])
+	_ iterator[int] = new(deadIter[int])
 )
 
 // iterator 迭代器
@@ -148,18 +149,18 @@ func (s supplyIter[T]) Concat(iters ...iterator[T]) iterator[T] {
 	return &s
 }
 
-func wrapAny[T any](iter iterator[T]) iterator[any]   { return &anyIterator[T]{iter} }
-func deWrapAny[T any](iter iterator[any]) iterator[T] { return iter.(*anyIterator[T]).iterator }
+func wrapAny[T any](iter iterator[T]) iterator[any]   { return &anyIter[T]{iter} }
+func deWrapAny[T any](iter iterator[any]) iterator[T] { return iter.(*anyIter[T]).iterator }
 
-type anyIterator[T any] struct{ iterator[T] }
+type anyIter[T any] struct{ iterator[T] }
 
-func (a *anyIterator[T]) Left() []any {
+func (a *anyIter[T]) Left() []any {
 	return To[T, any](func(t T) any { return t })(a.iterator.Left()...).([]any)
 }
-func (a *anyIterator[T]) Next() any           { return a.iterator.NextN(1) }
-func (a *anyIterator[T]) NextN(n int64) any   { return a.iterator.NextN(n) }
-func (a anyIterator[T]) Clone() iterator[any] { return &anyIterator[T]{a.iterator.Clone()} }
-func (a anyIterator[T]) Concat(iters ...iterator[any]) iterator[any] {
+func (a *anyIter[T]) Next() any           { return a.iterator.NextN(1) }
+func (a *anyIter[T]) NextN(n int64) any   { return a.iterator.NextN(n) }
+func (a anyIter[T]) Clone() iterator[any] { return &anyIter[T]{a.iterator.Clone()} }
+func (a anyIter[T]) Concat(iters ...iterator[any]) iterator[any] {
 	var wrappedIters []iterator[T]
 	for _, iter := range iters {
 		wrappedIters = append(wrappedIters, deWrapAny[T](iter))
@@ -177,3 +178,15 @@ type Sortable[T any] struct {
 func (a *Sortable[T]) Len() int           { return len(a.List) }
 func (a *Sortable[T]) Less(i, j int) bool { return a.Cmp(a.List[i], a.List[j]) < 0 }
 func (a *Sortable[T]) Swap(i, j int)      { a.List[i], a.List[j] = a.List[j], a.List[i] }
+
+type deadIter[T any] struct{}
+
+func (*deadIter[T]) Size() int64                             { return 0 }
+func (*deadIter[T]) HasNext() bool                           { return false }
+func (*deadIter[T]) HasNextN(int64) bool                     { return false }
+func (*deadIter[T]) Next() (t T)                             { return t }
+func (*deadIter[T]) NextN(int64) (t T)                       { return t }
+func (*deadIter[T]) Left() []T                               { return nil }
+func (*deadIter[T]) CurIndex() int64                         { return 0 }
+func (*deadIter[T]) Concat(iters ...iterator[T]) iterator[T] { return nil }
+func (i *deadIter[T]) Clone() iterator[T]                    { return i }
