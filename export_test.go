@@ -28,7 +28,7 @@ func TestStream(t *testing.T) {
 
 	stream.SliceOf(array...).
 		Convert(func(i int) any { return float64(i + 1) }).
-		ForEach(func(data ...any) { fmt.Println(data...) })
+		ForEach(func(data any) { fmt.Println(data) })
 
 	floatResult := stream.SliceOf(array...).
 		Convert(func(i int) any { return float64(i + 1) }).Collect(func(data ...any) any {
