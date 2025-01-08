@@ -1,6 +1,8 @@
 package stream
 
 import (
+	"sync"
+
 	"github.com/tr1v3r/stream/types"
 )
 
@@ -114,14 +116,20 @@ func (i staticIter[T]) Concat(iters ...iterator[T]) iterator[T] {
 }
 
 type supplyIter[T any] struct {
+	mu       sync.RWMutex
+	dead     bool
 	curIndex int64
 	supply   types.Supplier[T]
 }
 
-func (s *supplyIter[T]) Size() int64         { return -1 }
-func (s *supplyIter[T]) Left() []T           { return nil }
-func (s *supplyIter[T]) CurIndex() int64     { return s.curIndex }
-func (s *supplyIter[T]) HasNext() bool       { return true }
+func (s *supplyIter[T]) Size() int64     { return -1 }
+func (s *supplyIter[T]) Left() []T       { return nil }
+func (s *supplyIter[T]) CurIndex() int64 { return s.curIndex }
+func (s *supplyIter[T]) HasNext() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return !s.dead
+}
 func (s *supplyIter[T]) HasNextN(int64) bool { return true }
 func (s *supplyIter[T]) Next() T             { return s.NextN(1) }
 func (s *supplyIter[T]) NextN(n int64) T {
@@ -129,14 +137,29 @@ func (s *supplyIter[T]) NextN(n int64) T {
 	for i := 0; i < int(n)-1; i++ {
 		s.supply()
 	}
-	t, _ := s.supply()
+
+	t, ok := s.supply()
+
+	s.mu.Lock()
+	s.dead = !ok
+	s.mu.Unlock()
+
 	return t
 }
-func (s supplyIter[T]) Clone() iterator[T] { return &s }
-func (s supplyIter[T]) Concat(iters ...iterator[T]) iterator[T] {
+func (s *supplyIter[T]) Clone() iterator[T] {
+	return &supplyIter[T]{
+		curIndex: s.curIndex,
+		supply:   s.supply,
+	}
+}
+func (s *supplyIter[T]) Concat(iters ...iterator[T]) iterator[T] {
+	if len(iters) == 0 {
+		return s
+	}
+
+	supply := s.supply
 	for _, iter := range iters {
-		supply := s.supply
-		s.supply = func() (t T, ok bool) {
+		supply = func() (t T, ok bool) {
 			if item, ok := supply(); ok { // return supply not finished
 				return item, true
 			}
@@ -146,7 +169,10 @@ func (s supplyIter[T]) Concat(iters ...iterator[T]) iterator[T] {
 			return t, false
 		}
 	}
-	return &s
+	return &supplyIter[T]{
+		curIndex: s.curIndex,
+		supply:   supply,
+	}
 }
 
 func wrapAny[T any](iter iterator[T]) iterator[any]   { return &anyIter[T]{iter} }
@@ -155,7 +181,7 @@ func deWrapAny[T any](iter iterator[any]) iterator[T] { return iter.(*anyIter[T]
 type anyIter[T any] struct{ iterator[T] }
 
 func (a *anyIter[T]) Left() []any {
-	return To[T, any](func(t T) any { return t })(a.iterator.Left()...).([]any)
+	return To(func(t T) any { return t })(a.iterator.Left()...).([]any)
 }
 func (a *anyIter[T]) Next() any           { return a.iterator.NextN(1) }
 func (a *anyIter[T]) NextN(n int64) any   { return a.iterator.NextN(n) }

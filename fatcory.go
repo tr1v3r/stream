@@ -4,7 +4,7 @@ import "github.com/tr1v3r/stream/types"
 
 // SliceOf receive array and initlize streamer
 func SliceOf[T any](slice ...T) Streamer[T] {
-	return newStreamer[T](newIterator[T](slice))
+	return newStreamer(newIterator(slice))
 }
 
 // Of create a new stream with supply
@@ -19,7 +19,7 @@ func Repeat[T any](t T) Streamer[T] {
 
 // RepeatN create a new stream with n times repeated data items
 func RepeatN[T any](t T, count int64) Streamer[T] {
-	return Repeat[T](t).Limit(count)
+	return Repeat(t).Limit(count)
 }
 
 // Concat concat streamers

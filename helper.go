@@ -20,7 +20,7 @@ func To[T, R any](converter types.Converter[T, R]) types.Collector[T] {
 
 // AnyTo converts a slice of any to a slice of T
 func AnyTo[T any](data ...any) types.Collector[any] {
-	return To[any, T](func(d any) T { return d.(T) })
+	return To(func(d any) T { return d.(T) })
 }
 
 // isNil detect if t is nil

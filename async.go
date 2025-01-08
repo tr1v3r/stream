@@ -5,6 +5,7 @@ import (
 	"math/rand"
 
 	"github.com/tr1v3r/pkg/pools"
+
 	"github.com/tr1v3r/stream/types"
 )
 
@@ -49,26 +50,26 @@ func (s *asyncStreamer[T]) Parallel(n int) Streamer[T] {
 }
 
 func (s *asyncStreamer[T]) Filter(judge types.Judge[T]) Streamer[T] {
-	return wrapAsyncStreamer[T](s.parallelSize, s.wrapAsyncStage(func(t T, ch chan<- T) {
+	return wrapAsyncStreamer(s.parallelSize, s.wrapAsyncStage(func(t T, ch chan<- T) {
 		if judge(t) {
 			ch <- t
 		}
 	})).WithContext(s.ctx)
 }
 func (s *asyncStreamer[T]) Map(m types.Mapper[T]) Streamer[T] {
-	return wrapAsyncStreamer[T](s.parallelSize, s.wrapAsyncStage(func(t T, ch chan<- T) {
+	return wrapAsyncStreamer(s.parallelSize, s.wrapAsyncStage(func(t T, ch chan<- T) {
 		ch <- m(t)
 	})).WithContext(s.ctx)
 }
 func (s *asyncStreamer[T]) Peek(consumer types.Consumer[T]) Streamer[T] {
-	return wrapAsyncStreamer[T](s.parallelSize, s.wrapAsyncStage(func(t T, ch chan<- T) {
+	return wrapAsyncStreamer(s.parallelSize, s.wrapAsyncStage(func(t T, ch chan<- T) {
 		consumer(t)
 		ch <- t
 	})).WithContext(s.ctx)
 }
 
 func (s *asyncStreamer[T]) Convert(convert types.Converter[T, any]) Streamer[any] {
-	return wrapAsyncStreamer[any](s.parallelSize, func() <-chan any {
+	return wrapAsyncStreamer(s.parallelSize, func() <-chan any {
 		ch := make(chan any, 1024)
 		go func(size int) {
 			defer close(ch)
@@ -175,7 +176,7 @@ func (s *asyncStreamer[T]) Last() T {
 func (s *asyncStreamer[T]) Count() int64 { return s.sync().Count() }
 
 func (s *asyncStreamer[T]) sync() Streamer[T] {
-	return wrapStreamer[T](newIterator[T](nil), func(iter iterator[T]) iterator[T] { return iter.Concat(newIterator[T](s.fetchAll())) }).WithContext(s.ctx)
+	return wrapStreamer(newIterator[T](nil), func(iter iterator[T]) iterator[T] { return iter.Concat(newIterator(s.fetchAll())) }).WithContext(s.ctx)
 }
 func (s *asyncStreamer[T]) fetchAll() (source []T) {
 	for t := range s.stage() {
