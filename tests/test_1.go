@@ -3,6 +3,7 @@ package tests
 import (
 	"fmt"
 	"math/rand"
+	"time"
 
 	"github.com/tr1v3r/stream"
 )
@@ -32,10 +33,12 @@ func Question1Sub2(employees []*Employee) []*Employee {
 
 // - Q3: - 输入 employees，对于没有手机号为0的数据，随机填写一个
 func Question1Sub3(employees []*Employee) []*Employee {
+	// Create a seeded random source for this function
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	return stream.SliceOf[*Employee](employees...).
 		Convert(func(e *Employee) any {
 			if e.Phone == "" {
-				e.Phone = fmt.Sprintf("%10d", rand.Int())
+				e.Phone = fmt.Sprintf("%10d", r.Int())
 			}
 			return e
 			// }).Collect(stream.To[any, *Employee](func(t any) *Employee { return t.(*Employee) })).([]*Employee)

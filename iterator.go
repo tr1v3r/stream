@@ -56,7 +56,7 @@ type meta struct {
 
 // Size return meta size
 func (m *meta) Size() int64 {
-	return int64(m.size)
+	return m.size
 }
 
 // HasNext return true if meta has next 1
@@ -187,7 +187,7 @@ func (a *anyIter[T]) Next() any           { return a.iterator.NextN(1) }
 func (a *anyIter[T]) NextN(n int64) any   { return a.iterator.NextN(n) }
 func (a anyIter[T]) Clone() iterator[any] { return &anyIter[T]{a.iterator.Clone()} }
 func (a anyIter[T]) Concat(iters ...iterator[any]) iterator[any] {
-	var wrappedIters []iterator[T]
+	wrappedIters := make([]iterator[T], 0, len(iters))
 	for _, iter := range iters {
 		wrappedIters = append(wrappedIters, deWrapAny[T](iter))
 	}

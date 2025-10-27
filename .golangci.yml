@@ -1,0 +1,96 @@
+# golangci-lint configuration for stream processing library
+# Reference: https://golangci-lint.run/usage/configuration/
+
+version: "2"
+
+run:
+  # Timeout for analysis, e.g., 30s, 5m
+  timeout: 5m
+
+  # Which dirs to skip
+  skip-dirs:
+    - tests
+    - vendor
+
+# Output configuration
+output:
+  # Format: colored-line-number|line-number|json|tab|checkstyle|code-climate|junit-xml|github-actions
+  format: colored-line-number
+
+  # Print lines of code with issue
+  print-issued-lines: true
+
+  # Print linter name in the end of issue text
+  print-linter-name: true
+
+# All available settings of specific linters
+linters-settings:
+  # Security checks
+  gosec:
+    # Exclude weak random number generator warnings for non-cryptographic use
+    excludes:
+      - G404
+
+# Linters configuration
+linters:
+  # Enable specific linters
+  enable:
+    # Code quality
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+    # Style and formatting
+    - gocritic
+    - gocyclo
+    - misspell
+    - prealloc
+    - unconvert
+    - unparam
+
+    # Performance
+    - bodyclose
+    - nilerr
+    - noctx
+    - rowserrcheck
+
+    # Additional checks
+    - dupl
+    - funlen
+    - goconst
+    - nestif
+
+issues:
+  # Exclude configuration
+  exclude-rules:
+    # Exclude some linters from running on tests files
+    - path: _test\.go
+      linters:
+        - gocyclo
+        - errcheck
+        - dupl
+        - gosec
+        - funlen
+
+    # Exclude unused function in helper files
+    - path: helper\.go
+      linters:
+        - unused
+
+    # Exclude variable declarations that are explicit for clarity in generic code
+    - linters:
+        - staticcheck
+      text: "ST1023"
+
+    # Exclude weak random number generator warnings for non-cryptographic use
+    - linters:
+        - gosec
+      text: "G404"
+
+  # Maximum issues count per one linter. Set to 0 to disable
+  max-issues-per-linter: 0
+
+  # Maximum count of issues with the same text. Set to 0 to disable
+  max-same-issues: 0

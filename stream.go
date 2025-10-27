@@ -4,6 +4,7 @@ import (
 	"context"
 	"math/rand"
 	"sort"
+	"time"
 
 	"github.com/tr1v3r/stream/types"
 )
@@ -11,6 +12,8 @@ import (
 var (
 	_ Streamer[any]     = newStreamer[any](nil)
 	_ Streamer[float64] = newStreamer[float64](nil)
+	// seededRand provides a seeded random source for non-cryptographic use
+	seededRand = rand.New(rand.NewSource(time.Now().UnixNano()))
 )
 
 var ctx = context.Background()
@@ -224,14 +227,14 @@ func (s *streamer[T]) Reduce(accumulator types.BinaryOperator[T]) T {
 	return result
 }
 func (s *streamer[T]) ReduceFrom(initValue T, accumulator types.BinaryOperator[T]) T {
-	var result T = initValue
+	result := initValue
 	for source := s.stage(s.source); !s.cancelled() && source.HasNext(); {
 		result = accumulator(result, source.Next())
 	}
 	return result
 }
 func (s *streamer[T]) ReduceWith(initValue any, accumulator types.Accumulator[T, any]) any {
-	var result any = initValue
+	result := initValue
 	for source := s.stage(s.source); !s.cancelled() && source.HasNext(); {
 		result = accumulator(result, source.Next())
 	}
@@ -248,7 +251,7 @@ func (s *streamer[T]) ReduceBy(initValueBulider func(sizeMayNegative int) any, a
 func (s *streamer[T]) First() T { return s.stage(s.source).Next() }
 func (s *streamer[T]) Take() T {
 	source := s.stage(s.source)
-	return source.NextN(rand.Int63n(source.Size()) + 1)
+	return source.NextN(seededRand.Int63n(source.Size()) + 1)
 }
 func (s *streamer[T]) Any() T { return s.Take() }
 func (s *streamer[T]) Last() T {

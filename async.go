@@ -2,7 +2,6 @@ package stream
 
 import (
 	"context"
-	"math/rand"
 
 	"github.com/tr1v3r/pkg/pools"
 
@@ -142,7 +141,7 @@ func (s *asyncStreamer[T]) Reduce(accumulator types.BinaryOperator[T]) (result T
 	return s.ReduceFrom(result, accumulator)
 }
 func (s *asyncStreamer[T]) ReduceFrom(initValue T, accumulator types.BinaryOperator[T]) T {
-	var result T = initValue
+	result := initValue
 	for t := range s.stage() {
 		if s.cancelled() {
 			return result
@@ -152,7 +151,7 @@ func (s *asyncStreamer[T]) ReduceFrom(initValue T, accumulator types.BinaryOpera
 	return result
 }
 func (s *asyncStreamer[T]) ReduceWith(initValue any, accumulator types.Accumulator[T, any]) any {
-	var result any = initValue
+	result := initValue
 	for t := range s.stage() {
 		result = accumulator(result, t)
 	}
@@ -165,7 +164,7 @@ func (s *asyncStreamer[T]) ReduceBy(initValueBulider func(sizeMayNegative int) a
 func (s *asyncStreamer[T]) First() T { return <-s.stage() }
 func (s *asyncStreamer[T]) Take() T {
 	data := s.fetchAll()
-	return data[rand.Intn(len(data))]
+	return data[seededRand.Intn(len(data))]
 }
 func (s *asyncStreamer[T]) Any() T { return s.Take() }
 func (s *asyncStreamer[T]) Last() T {
