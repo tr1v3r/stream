@@ -9,7 +9,7 @@ Requires Go 1.23+.
 - **True lazy evaluation** — intermediate operations compose `iter.Seq[T]` closures; nothing runs until a terminal operation iterates
 - **Short-circuiting** — `First()`, `AnyMatch()`, `Limit()` stop processing as soon as the result is known
 - **Generics** — type-safe streams with `Streamer[T]`
-- **iter.Seq integration** — `Seq()` method and `Of`/`OfSeq2` factory functions for native `for range` interop
+- **iter.Seq integration** — `Seq()` method and `From`/`From2` factory functions for native `for range` interop
 - **Parallel processing** — concurrent execution via goroutine worker pools
 - **Functional pipelines** — filter, map, flatmap, reduce, sort, distinct, and more
 - **Infinite streams** — supplier-based streams for generator patterns
@@ -45,17 +45,17 @@ func main() {
 | Function | Description |
 |----------|-------------|
 | `SliceOf[T](slice ...T)` | Create a stream from a slice or variadic elements |
-| `Of[T](seq, sizeHint)` | Create from an `iter.Seq[T]` (supports infinite streams) |
-| `OfSeq2[K, V](seq)` | Create from an `iter.Seq2[K, V]` |
+| `From[T](seq, sizeHint)` | Create from an `iter.Seq[T]` (supports infinite streams) |
+| `From2[K, V](seq)` | Create from an `iter.Seq2[K, V]` |
 | `Repeat[T](t T)` | Create an infinite stream repeating `t` |
 | `RepeatN[T](t T, n int64)` | Create a stream repeating `t` exactly `n` times |
 | `Concat[T](dst, ...src)` | Concatenate multiple streams |
-| `Of[T](seq, sizeHint)` | Create from a Go `iter.Seq[T]` |
-| `OfSeq2[K, V](seq)` | Create from a Go `iter.Seq2[K, V]` |
+| `From[T](seq, sizeHint)` | Create from a Go `iter.Seq[T]` |
+| `From2[K, V](seq)` | Create from a Go `iter.Seq2[K, V]` |
 
 ```go
 // From an iter.Seq
-fib := stream.Of(func(yield func(int) bool) {
+fib := stream.From(func(yield func(int) bool) {
     a, b := 0, 1
     for yield(a) { a, b = b, a+b }
 }, -1).Limit(10)
@@ -157,11 +157,11 @@ for v := range stream.SliceOf(1, 2, 3).Filter(func(n int) bool { return n > 1 })
 
 // Create a stream from an existing iter.Seq
 seq := slices.Values([]int{10, 20, 30})
-stream.Of(seq, 3).Map(func(n int) int { return n * 2 }).ToSlice() // [20, 40, 60]
+stream.From(seq, 3).Map(func(n int) int { return n * 2 }).ToSlice() // [20, 40, 60]
 
 // Create a stream from iter.Seq2 (uses values only)
 m := map[string]int{"a": 1, "b": 2}
-stream.OfSeq2(maps.All(m)).ToSlice() // [1, 2] (order varies)
+stream.From2(maps.All(m)).ToSlice() // [1, 2] (order varies)
 ```
 
 ## Parallel Processing

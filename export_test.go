@@ -90,7 +90,7 @@ func TestStream_Seq(t *testing.T) {
 	}
 }
 
-func TestStream_Of(t *testing.T) {
+func TestStream_From(t *testing.T) {
 	seq := func(yield func(int) bool) {
 		for i := 1; i <= 3; i++ {
 			if !yield(i) {
@@ -98,7 +98,7 @@ func TestStream_Of(t *testing.T) {
 			}
 		}
 	}
-	result := stream.Of(seq, 3).Map(func(n int) int { return n * 10 }).ToSlice()
+	result := stream.From(seq, 3).Map(func(n int) int { return n * 10 }).ToSlice()
 	if len(result) != 3 || result[0] != 10 || result[1] != 20 || result[2] != 30 {
 		t.Fatalf("expected [10, 20, 30], got %v", result)
 	}

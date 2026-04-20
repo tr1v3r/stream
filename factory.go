@@ -35,13 +35,11 @@ func Concat[T any](srcs ...Streamer[T]) Streamer[T] {
 	}, -1)
 }
 
-// Of creates a stream from an iter.Seq[T].
-func Of[T any](seq iter.Seq[T], sizeHint int64) Streamer[T] {
+func From[T any](seq iter.Seq[T], sizeHint int64) Streamer[T] {
 	return newStreamer(seq, sizeHint)
 }
 
-// OfSeq2 creates a stream from an iter.Seq2[K, V], projecting to values only.
-func OfSeq2[K, V any](seq iter.Seq2[K, V]) Streamer[V] {
+func From2[K, V any](seq iter.Seq2[K, V]) Streamer[V] {
 	return newStreamer(func(yield func(V) bool) {
 		for _, v := range seq {
 			if !yield(v) {
