@@ -23,14 +23,8 @@ func RepeatN[T any](t T, count int64) Streamer[T] {
 	return Repeat(t).Limit(count)
 }
 
-// Concat concatenates multiple streams.
-func Concat[T any](dst Streamer[T], srcs ...Streamer[T]) Streamer[T] {
+func Concat[T any](srcs ...Streamer[T]) Streamer[T] {
 	return newStreamer(func(yield func(T) bool) {
-		for v := range dst.Seq() {
-			if !yield(v) {
-				return
-			}
-		}
 		for _, src := range srcs {
 			for v := range src.Seq() {
 				if !yield(v) {
