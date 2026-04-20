@@ -21,12 +21,11 @@
 //
 // Use factory functions to create streams:
 //   - SliceOf: from a slice or variadic elements
-//   - Of: from a supplier function (supports infinite streams)
+//   - Of: from an iter.Seq[T] (supports infinite streams)
+//   - OfSeq2: from an iter.Seq2[K, V]
 //   - Repeat: infinite repeating element
 //   - RepeatN: element repeated N times
 //   - Concat: combine multiple streams
-//   - FromSeq: from a Go 1.23+ iter.Seq[T]
-//   - FromSeq2: from a Go 1.23+ iter.Seq2[K, V]
 //
 // # Operations
 //

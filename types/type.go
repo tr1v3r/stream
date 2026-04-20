@@ -27,9 +27,6 @@ type (
 	// Collector collect source to any data struct
 	Collector[T any] func(...T) any
 
-	// provide source data
-	Supplier[T any] func() (T, bool)
-
 	// Unique unique item interface
 	Unique interface{ Key() string }
 )

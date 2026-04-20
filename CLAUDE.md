@@ -45,8 +45,8 @@ golangci-lint run --config=.golangci.yml
    - `Of`: Create stream from supplier function
    - `Repeat`/`RepeatN`: Infinite/finite repeating streams
    - `Concat`: Combine multiple streams
-   - `FromSeq`: Create from `iter.Seq[T]`
-   - `FromSeq2`: Create from `iter.Seq2[K, V]`
+   - `Of`: Create from `iter.Seq[T]`
+   - `OfSeq2`: Create from `iter.Seq2[K, V]`
 
 4. **Helper Functions** (`helper.go`): Utility functions
    - `To[T, R]`: Convert slice type with converter function
