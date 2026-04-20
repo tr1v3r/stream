@@ -2,6 +2,7 @@ package stream
 
 import (
 	"context"
+	"iter"
 
 	"github.com/tr1v3r/stream/types"
 )
@@ -10,16 +11,17 @@ type Streamer[T any] interface {
 	// WithContext set Streamer context
 	WithContext(context.Context) Streamer[T]
 
-	// stateless operate 无状态操作
+	// stateless operate
 
 	// Filter filter data by Judge result
 	Filter(types.Judge[T]) Streamer[T]
 	Map(types.Mapper[T]) Streamer[T]
 	Convert(types.Converter[T, any]) Streamer[any]
 	Peek(types.Consumer[T]) Streamer[T]
-	// FlatMap(func(T) Streamer[any]) Streamer[any]
+	// FlatMap flattens each element to a sub-stream and concatenates
+	FlatMap(func(T) Streamer[any]) Streamer[any]
 
-	// stateful operate 有状态操作
+	// stateful operate
 
 	Distinct() Streamer[T]
 	Sort(types.Comparator[T]) Streamer[T]
@@ -37,12 +39,10 @@ type Streamer[T any] interface {
 	// Parallel 0 do nothing, 1 async work, 2-n concurrent work
 	Parallel(int) Streamer[T]
 
-	// terminal operate 终止操作
+	// terminal operate
 
-	// ToSlice
 	ToSlice() []T
 	Collect(types.Collector[T]) any
-	// ForEach
 	ForEach(types.Consumer[T])
 	// Match methods
 	AllMatch(types.Judge[T]) bool
@@ -52,14 +52,14 @@ type Streamer[T any] interface {
 	Reduce(accumulator types.BinaryOperator[T]) T
 	ReduceFrom(initValue T, accumulator types.BinaryOperator[T]) T
 	ReduceWith(initValue any, accumulator types.Accumulator[T, any]) any
-	// ReduceBy use `buildInitValue` to build the initValue, which parameter is a int64 means element size, or -1 if unknown size.
-	// Then use `accumulator` to add each element to previous result
-	ReduceBy(initValueBulider func(sizeMayNegative int) any, accumulator types.Accumulator[T, any]) any
+	ReduceBy(initValueBuilder func(sizeMayNegative int) any, accumulator types.Accumulator[T, any]) any
 	// Pick one
 	First() T
 	Take() T
 	Any() T
 	Last() T
-	// Cout return count result
+	// Count return count result
 	Count() int64
+	// Seq returns the underlying iter.Seq[T] for native range loops
+	Seq() iter.Seq[T]
 }

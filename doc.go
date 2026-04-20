@@ -1,7 +1,11 @@
 // Package stream provides Java Streams-like functional operations on Go collections.
 //
-// It enables lazy evaluation, parallel processing, and functional-style pipelines
-// using Go generics (requires Go 1.20+).
+// It enables true lazy evaluation, parallel processing, and functional-style pipelines
+// using Go generics and the iter package (requires Go 1.23+).
+//
+// Intermediate operations compose iter.Seq[T] closures without executing any work.
+// Processing is deferred until a terminal operation ranges over the pipeline.
+// Short-circuit operations (First, AnyMatch, Limit) naturally stop early.
 //
 // # Quick Start
 //
@@ -17,7 +21,8 @@
 //
 // Use factory functions to create streams:
 //   - SliceOf: from a slice or variadic elements
-//   - Of: from a supplier function (supports infinite streams)
+//   - From: from an iter.Seq[T] (supports infinite streams)
+//   - From2: from an iter.Seq2[K, V]
 //   - Repeat: infinite repeating element
 //   - RepeatN: element repeated N times
 //   - Concat: combine multiple streams
@@ -25,23 +30,30 @@
 // # Operations
 //
 // Intermediate (lazy, return a new stream):
-//   - Stateless: Filter, Map, Convert, Peek
+//   - Stateless: Filter, Map, Convert, Peek, FlatMap
 //   - Stateful: Distinct, Sort, ReverseSort, Reverse, Limit, Skip, Pick
 //
 // Terminal (eager, execute the pipeline):
 //   - Collect: ToSlice, Collect
-//   - Iterate: ForEach
+//   - Iterate: ForEach, Seq (native iter.Seq[T] for range loops)
 //   - Reduce: Reduce, ReduceFrom, ReduceWith, ReduceBy
 //   - Match: AllMatch, NonMatch, AnyMatch
 //   - Element: First, Take, Any, Last
 //   - Count: Count
 //
+// # iter.Seq Integration
+//
+// The Seq() method returns the underlying iter.Seq[T] for use with Go's range:
+//
+//	for v := range stream.SliceOf(1, 2, 3).Seq() {
+//	    fmt.Println(v)
+//	}
+//
 // # Parallel Processing
 //
 // Use Parallel(n) to enable concurrent processing. n controls concurrency:
 //   - 0: no change (synchronous)
-//   - 1: asynchronous single-worker
-//   - 2+: concurrent workers
+//   - 1+: concurrent workers
 //
 //	stream.SliceOf(data...).Parallel(4).Filter(...).ForEach(...)
 //

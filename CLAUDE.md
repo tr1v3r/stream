@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Go stream processing library (`github.com/tr1v3r/stream`) that provides Java Streams-like functionality for Go. It enables functional-style operations on collections with support for lazy evaluation, parallel processing, and various stream operations.
+This is a Go stream processing library (`github.com/tr1v3r/stream`) that provides Java Streams-like functionality for Go. It uses `iter.Seq[T]` from Go 1.23+ as the core pipeline representation, enabling true lazy evaluation with short-circuit support.
 
 ## Development Commands
 
@@ -16,17 +16,8 @@ go test ./...
 # Run tests with verbose output
 go test ./... -v
 
-# Run tests for specific package
-go test ./tests
-
 # Run linting
 golangci-lint run --config=.golangci.yml
-```
-
-### Code Quality
-```bash
-# Fix linting issues (if supported by linters)
-golangci-lint run --config=.golangci.yml --fix
 ```
 
 ## Architecture
@@ -34,32 +25,30 @@ golangci-lint run --config=.golangci.yml --fix
 ### Core Components
 
 1. **Streamer Interface** (`export.go`): Main interface defining stream operations
-   - Stateless operations: `Filter`, `Map`, `Convert`, `Peek`
+   - Stateless operations: `Filter`, `Map`, `Convert`, `Peek`, `FlatMap`
    - Stateful operations: `Distinct`, `Sort`, `ReverseSort`, `Reverse`, `Limit`, `Skip`, `Pick`
-   - Terminal operations: `ToSlice`, `Collect`, `ForEach`, `Reduce`, `Count`
+   - Terminal operations: `ToSlice`, `Collect`, `ForEach`, `Reduce`, `Count`, `Seq`
    - Match operations: `AllMatch`, `NonMatch`, `AnyMatch`
    - Element operations: `First`, `Take`, `Any`, `Last`
    - Reduce variants: `Reduce`, `ReduceFrom`, `ReduceWith`, `ReduceBy`
-   - Eager operations: `Append`, `Execute`
 
-2. **Iterator Pattern** (`iterator.go`): Core abstraction for data traversal
-   - `staticIter`: For finite collections
-   - `supplyIter`: For infinite/streaming data sources (Size() returns -1)
-   - `anyIter`: For type conversion between `T` and `any`
-   - `deadIter`: Empty iterator sentinel
+2. **Stream Implementation** (`stream.go`): Core `streamer[T]` struct
+   - Holds `iter.Seq[T]` as internal pipeline
+   - `sizeHint int64` for known-size optimizations (-1 for unknown)
+   - `parallelSize int` for concurrent processing mode
+   - All intermediate ops compose `iter.Seq[T]` closures (true lazy)
+   - `parallelSeq` helper for N-worker concurrent processing
+   - `Sortable[T]` for sort.Interface support
 
-3. **Stream Implementations** (`stream.go`, `async.go`):
-   - `streamer`: Synchronous stream processing
-   - `asyncStreamer`: Parallel stream processing with worker pools
-
-4. **Factory Functions** (`fatcory.go`): Stream creation utilities (note: filename is a typo)
+3. **Factory Functions** (`factory.go`): Stream creation utilities
    - `SliceOf`: Create stream from slice
    - `Of`: Create stream from supplier function
-   - `Repeat`: Create infinite repeating stream
-   - `RepeatN`: Create stream with N repetitions
+   - `Repeat`/`RepeatN`: Infinite/finite repeating streams
    - `Concat`: Combine multiple streams
+   - `From`: Create from `iter.Seq[T]`
+   - `From2`: Create from `iter.Seq2[K, V]`
 
-5. **Helper Functions** (`helper.go`): Utility functions
+4. **Helper Functions** (`helper.go`): Utility functions
    - `To[T, R]`: Convert slice type with converter function
    - `AnyTo[T]`: Convert `[]any` to typed slice
    - `distinctJudge`: Internal distinct filter using `fmt.Sprint` or `types.Unique`
@@ -74,34 +63,25 @@ golangci-lint run --config=.golangci.yml --fix
 
 ### Critical Gotchas
 
-- **Streams are single-use**: Calling a terminal operation consumes the underlying iterator. Subsequent terminal calls on the same stream produce incorrect or empty results. Create a new stream for each pipeline.
-- **supplyIter panics on size-dependent ops**: `Count()`, `Take()`, `Last()` will panic on supply-based streams because `Size()` returns -1.
-- **Distinct uses `fmt.Sprint` for hashing**: By default, `Distinct()` stringifies elements. Implement the `types.Unique` interface for custom hash keys.
-- **`Pick` with negative end**: Uses source size as end bound. Only works on static iterators.
-- **`Convert` produces `Streamer[any]`**: Type information is lost; use `AnyTo[T]()` or `To[T, R]()` to convert back.
+- **Streams are single-use**: Calling a terminal operation consumes the underlying `iter.Seq`. Create a new stream for each pipeline.
+- **Lazy evaluation**: Intermediate operations compose closures without executing. Work happens only in terminal operations. `Limit(1)` followed by `First()` on a million-element stream processes only 1-2 elements.
+- **Distinct uses `fmt.Sprint`** for hashing by default. Implement the `types.Unique` interface for custom hash keys.
+- **`Convert` and `FlatMap` produce `Streamer[any]`**: Type information is lost; use `AnyTo[T]()` or `To[T, R]()` to convert back.
+- **Parallel mode does not preserve order**: Elements may arrive out of order with `Parallel(n)` where n > 1.
+- **`Pick` with negative `end`**: Must materialize the entire stream to determine size.
 
-### Iterator Types
-- **Static Iterator**: For finite collections, supports random access
-- **Supply Iterator**: For infinite data sources, uses supplier functions
-- **Dead Iterator**: Empty iterator for edge cases
+### sizeHint Propagation
 
-### Stream Operations
-- **Intermediate Operations**: Return new streams (lazy evaluation)
-- **Terminal Operations**: Execute the pipeline and return results
-- **Parallel Operations**: Use `Parallel(n)` to enable concurrent processing
-
-## Testing
-
-Test files are located in:
-- `export_test.go`: Core stream functionality tests
-- `tests/`: Additional test cases and examples
-
-Tests demonstrate various stream operations including filtering, mapping, reduction, and parallel processing.
+- `Filter`, `Distinct`, `FlatMap`: hint becomes -1
+- `Map`, `Peek`: hint preserved
+- `Limit(n)`: min(hint, n) if hint >= 0
+- `Skip(n)`: max(0, hint - n) if hint >= 0
+- `Sort`, `ReverseSort`, `Reverse`: hint preserved
 
 ## Dependencies
 
-- `github.com/tr1v3r/pkg`: For worker pool implementation in async streams
-- Go 1.20+: Required for generic types
+- No external dependencies (removed `github.com/tr1v3r/pkg`)
+- Go 1.23+: Required for `iter.Seq[T]` and generic types
 
 ### Type Definitions (`types/type.go`)
 - `Judge[T]`, `Mapper[T]`, `Converter[T,R]`, `Comparator[T]`, `Consumer[T]`
@@ -112,11 +92,7 @@ Tests demonstrate various stream operations including filtering, mapping, reduct
 
 When adding new stream operations:
 1. Add method to `Streamer` interface in `export.go`
-2. Implement in both `streamer` (sync) and `asyncStreamer` (async)
-3. Add appropriate tests
-4. Update documentation
-
-When working with iterators:
-- Use `newIterator()` for static data
-- Use `supplyIter` for generator functions
-- Handle context cancellation in long-running operations
+2. Implement in `streamer[T]` in `stream.go`
+3. For parallel support, use `parallelSeq` helper or handle `parallelSize > 0` case
+4. Add appropriate tests
+5. Update documentation

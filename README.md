@@ -1,15 +1,17 @@
 # stream
 
-A Go stream processing library that brings Java Streams-like functional operations to Go collections using generics.
+A Go stream processing library that brings Java Streams-like functional operations to Go collections using generics and `iter.Seq`.
 
-Requires Go 1.20+.
+Requires Go 1.23+.
 
 ## Features
 
-- **Lazy evaluation** — intermediate operations build a pipeline; nothing runs until a terminal operation
+- **True lazy evaluation** — intermediate operations compose `iter.Seq[T]` closures; nothing runs until a terminal operation iterates
+- **Short-circuiting** — `First()`, `AnyMatch()`, `Limit()` stop processing as soon as the result is known
 - **Generics** — type-safe streams with `Streamer[T]`
-- **Parallel processing** — concurrent execution via worker pools
-- **Functional pipelines** — filter, map, reduce, sort, distinct, and more
+- **iter.Seq integration** — `Seq()` method and `From`/`From2` factory functions for native `for range` interop
+- **Parallel processing** — concurrent execution via goroutine worker pools
+- **Functional pipelines** — filter, map, flatmap, reduce, sort, distinct, and more
 - **Infinite streams** — supplier-based streams for generator patterns
 
 ## Installation
@@ -43,20 +45,28 @@ func main() {
 | Function | Description |
 |----------|-------------|
 | `SliceOf[T](slice ...T)` | Create a stream from a slice or variadic elements |
-| `Of[T](supply Supplier[T])` | Create a stream from a supplier function |
+| `From[T](seq, sizeHint)` | Create from an `iter.Seq[T]` (supports infinite streams) |
+| `From2[K, V](seq)` | Create from an `iter.Seq2[K, V]` |
 | `Repeat[T](t T)` | Create an infinite stream repeating `t` |
 | `RepeatN[T](t T, n int64)` | Create a stream repeating `t` exactly `n` times |
 | `Concat[T](dst, ...src)` | Concatenate multiple streams |
+| `From[T](seq, sizeHint)` | Create from a Go `iter.Seq[T]` |
+| `From2[K, V](seq)` | Create from a Go `iter.Seq2[K, V]` |
 
 ```go
-// From a supplier
-nums := stream.Of(func() (int, bool) { return rand.Intn(100), true })
+// From an iter.Seq
+fib := stream.From(func(yield func(int) bool) {
+    a, b := 0, 1
+    for yield(a) { a, b = b, a+b }
+}, -1).Limit(10)
 
 // Repeat
 fives := stream.RepeatN(5, 10) // [5, 5, 5, 5, 5, 5, 5, 5, 5, 5]
 ```
 
 ## Intermediate Operations
+
+All intermediate operations are lazy — they compose closures without processing elements.
 
 ### Stateless
 
@@ -66,12 +76,19 @@ fives := stream.RepeatN(5, 10) // [5, 5, 5, 5, 5, 5, 5, 5, 5, 5]
 | `Map` | `(Mapper[T]) Streamer[T]` | Transform each element (same type) |
 | `Convert` | `(Converter[T, any]) Streamer[any]` | Transform to a different type |
 | `Peek` | `(Consumer[T]) Streamer[T]` | Apply an action without modifying elements |
+| `FlatMap` | `(func(T) Streamer[any]) Streamer[any]` | Flatten each element to a sub-stream |
 
 ```go
 stream.SliceOf(1, 2, 3, 4).
     Filter(func(n int) bool { return n > 2 }).   // [3, 4]
     Map(func(n int) int { return n * 10 }).       // [30, 40]
     Peek(func(n int) { fmt.Println(n) })          // prints 30, 40
+
+// FlatMap
+stream.SliceOf(1, 2, 3).
+    FlatMap(func(n int) stream.Streamer[any] {
+        return stream.SliceOf[any](n, n*10)
+    }) // [1, 10, 2, 20, 3, 30]
 ```
 
 ### Stateful
@@ -104,11 +121,6 @@ stream.SliceOf(3, 1, 4, 1, 5).
 | `ForEach` | `(Consumer[T])` | Iterate over each element |
 | `Count` | `() int64` | Return the number of elements |
 
-```go
-results := stream.SliceOf(1, 2, 3).ToSlice()
-count := stream.SliceOf(1, 2, 3).Count() // 3
-```
-
 ### Reduce
 
 | Method | Signature | Description |
@@ -117,14 +129,6 @@ count := stream.SliceOf(1, 2, 3).Count() // 3
 | `ReduceFrom` | `(T, BinaryOperator[T]) T` | Reduce with explicit init value |
 | `ReduceWith` | `(any, Accumulator[T, any]) any` | Reduce with different accumulator type |
 | `ReduceBy` | `(initBuilder, Accumulator[T, any]) any` | Reduce with size-aware init builder |
-
-```go
-sum := stream.SliceOf(1, 2, 3).Reduce(func(a, b int) int { return a + b }) // 6
-
-joined := stream.SliceOf("a", "b", "c").
-    ReduceWith("", func(acc any, s string) any { return acc.(string) + s }).(string)
-// "abc"
-```
 
 ### Match
 
@@ -143,6 +147,23 @@ joined := stream.SliceOf("a", "b", "c").
 | `Any` | `() T` | Alias for Take |
 | `Last` | `() T` | Last element |
 
+## iter.Seq Integration
+
+```go
+// Convert a stream to iter.Seq for native range loops
+for v := range stream.SliceOf(1, 2, 3).Filter(func(n int) bool { return n > 1 }).Seq() {
+    fmt.Println(v) // 2, 3
+}
+
+// Create a stream from an existing iter.Seq
+seq := slices.Values([]int{10, 20, 30})
+stream.From(seq, 3).Map(func(n int) int { return n * 2 }).ToSlice() // [20, 40, 60]
+
+// Create a stream from iter.Seq2 (uses values only)
+m := map[string]int{"a": 1, "b": 2}
+stream.From2(maps.All(m)).ToSlice() // [1, 2] (order varies)
+```
+
 ## Parallel Processing
 
 ```go
@@ -155,8 +176,7 @@ stream.SliceOf(largeData...).
 
 `Parallel(n)` behavior:
 - `n <= 0`: synchronous (no change)
-- `n == 1`: asynchronous single worker
-- `n >= 2`: concurrent workers with a worker pool
+- `n >= 1`: concurrent workers with goroutine pools
 
 Use `WithContext(ctx)` to support cancellation:
 
@@ -189,15 +209,15 @@ type Consumer[T any] func(T)                      // Side-effect action
 type BinaryOperator[T any] func(T, T) T           // Same-type accumulator
 type Accumulator[T, R any] func(R, T) R           // Cross-type accumulator
 type Collector[T any] func(...T) any              // Collect to result
-type Supplier[T any] func() (T, bool)             // Element source (false = done)
 type Unique interface{ Key() string }             // Custom distinct key
 ```
 
 ## Important Notes
 
 - **Streams are single-use.** A terminal operation consumes the stream. Create a new stream for each pipeline.
+- **Lazy evaluation** — intermediate operations compose closures; work happens only during terminal operations. `Limit(1).First()` on a million elements only processes one element.
 - **Distinct uses `fmt.Sprint`** by default for hashing. Implement the `types.Unique` interface (`Key() string`) for custom hash keys.
-- **Supplier-based streams** (created with `Of`, `Repeat`) have unknown size. Operations like `Count()`, `Take()`, and `Last()` will panic on these streams. Use `Limit()` first to bound them.
+- **Parallel mode does not preserve order.** Elements may be processed out of order when using `Parallel(n)` with `n > 1`. Use `Sort` after parallel operations if order matters.
 
 ## License
 
