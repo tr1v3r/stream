@@ -65,7 +65,11 @@ func (s *streamer[T]) parallelSeq(work func(T, chan<- T)) iter.Seq[T] {
 		go func() {
 			defer close(in)
 			for v := range prev {
-				in <- v
+				select {
+				case in <- v:
+				case <-s.ctx.Done():
+					return
+				}
 			}
 		}()
 
@@ -75,6 +79,9 @@ func (s *streamer[T]) parallelSeq(work func(T, chan<- T)) iter.Seq[T] {
 			go func() {
 				defer wg.Done()
 				for v := range in {
+					if s.cancelled() {
+						return
+					}
 					work(v, out)
 				}
 			}()
