@@ -25,9 +25,6 @@ golangci-lint run --config=.golangci.yml
 
 ### Code Quality
 ```bash
-# Run linter
-golangci-lint run --config=.golangci.yml
-
 # Fix linting issues (if supported by linters)
 golangci-lint run --config=.golangci.yml --fix
 ```
@@ -38,31 +35,34 @@ golangci-lint run --config=.golangci.yml --fix
 
 1. **Streamer Interface** (`export.go`): Main interface defining stream operations
    - Stateless operations: `Filter`, `Map`, `Convert`, `Peek`
-   - Stateful operations: `Distinct`, `Sort`, `Reverse`, `Limit`, `Skip`, `Pick`
+   - Stateful operations: `Distinct`, `Sort`, `ReverseSort`, `Reverse`, `Limit`, `Skip`, `Pick`
    - Terminal operations: `ToSlice`, `Collect`, `ForEach`, `Reduce`, `Count`
+   - Match operations: `AllMatch`, `NonMatch`, `AnyMatch`
+   - Element operations: `First`, `Take`, `Any`, `Last`
+   - Reduce variants: `Reduce`, `ReduceFrom`, `ReduceWith`, `ReduceBy`
+   - Eager operations: `Append`, `Execute`
 
 2. **Iterator Pattern** (`iterator.go`): Core abstraction for data traversal
    - `staticIter`: For finite collections
-   - `supplyIter`: For infinite/streaming data sources
+   - `supplyIter`: For infinite/streaming data sources (Size() returns -1)
    - `anyIter`: For type conversion between `T` and `any`
+   - `deadIter`: Empty iterator sentinel
 
 3. **Stream Implementations** (`stream.go`, `async.go`):
    - `streamer`: Synchronous stream processing
    - `asyncStreamer`: Parallel stream processing with worker pools
 
-4. **Factory Functions** (`fatcory.go`): Stream creation utilities
+4. **Factory Functions** (`fatcory.go`): Stream creation utilities (note: filename is a typo)
    - `SliceOf`: Create stream from slice
    - `Of`: Create stream from supplier function
    - `Repeat`: Create infinite repeating stream
+   - `RepeatN`: Create stream with N repetitions
    - `Concat`: Combine multiple streams
 
-### Key Design Patterns
-
-- **Lazy Evaluation**: Operations are chained and only executed when terminal operation is called
-- **Iterator Abstraction**: Unified interface for different data sources (static collections, generators, etc.)
-- **Type Safety**: Generic types with proper type constraints
-- **Context Support**: All operations respect context cancellation
-- **Parallel Processing**: Worker pool-based parallel execution for async streams
+5. **Helper Functions** (`helper.go`): Utility functions
+   - `To[T, R]`: Convert slice type with converter function
+   - `AnyTo[T]`: Convert `[]any` to typed slice
+   - `distinctJudge`: Internal distinct filter using `fmt.Sprint` or `types.Unique`
 
 ### Package Structure
 
@@ -71,6 +71,14 @@ golangci-lint run --config=.golangci.yml --fix
 - `stream/tests/`: Test cases and examples
 
 ## Important Implementation Details
+
+### Critical Gotchas
+
+- **Streams are single-use**: Calling a terminal operation consumes the underlying iterator. Subsequent terminal calls on the same stream produce incorrect or empty results. Create a new stream for each pipeline.
+- **supplyIter panics on size-dependent ops**: `Count()`, `Take()`, `Last()` will panic on supply-based streams because `Size()` returns -1.
+- **Distinct uses `fmt.Sprint` for hashing**: By default, `Distinct()` stringifies elements. Implement the `types.Unique` interface for custom hash keys.
+- **`Pick` with negative end**: Uses source size as end bound. Only works on static iterators.
+- **`Convert` produces `Streamer[any]`**: Type information is lost; use `AnyTo[T]()` or `To[T, R]()` to convert back.
 
 ### Iterator Types
 - **Static Iterator**: For finite collections, supports random access
@@ -81,11 +89,6 @@ golangci-lint run --config=.golangci.yml --fix
 - **Intermediate Operations**: Return new streams (lazy evaluation)
 - **Terminal Operations**: Execute the pipeline and return results
 - **Parallel Operations**: Use `Parallel(n)` to enable concurrent processing
-
-### Error Handling
-- Context cancellation is respected throughout the pipeline
-- Panic recovery should be implemented for production use
-- Type conversion errors may occur when using `Convert` operations
 
 ## Testing
 
@@ -99,6 +102,11 @@ Tests demonstrate various stream operations including filtering, mapping, reduct
 
 - `github.com/tr1v3r/pkg`: For worker pool implementation in async streams
 - Go 1.20+: Required for generic types
+
+### Type Definitions (`types/type.go`)
+- `Judge[T]`, `Mapper[T]`, `Converter[T,R]`, `Comparator[T]`, `Consumer[T]`
+- `BinaryOperator[T]`, `Accumulator[T,R]`, `Collector[T]`, `Supplier[T]`
+- `Unique`: Interface for custom distinct hashing (`Key() string`)
 
 ## Common Development Tasks
 
