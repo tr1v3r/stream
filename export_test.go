@@ -60,7 +60,75 @@ func TestStream_1(t *testing.T) {
 		return result + data
 	})
 	fmt.Println("stream Reduce sum: ", result)
-
-	// var x []any = []any{"hello", "world"}
-	// stream.SliceOf(x.([]string))
 }
+
+func TestStream_LazyEval(t *testing.T) {
+	// Verify true lazy evaluation: Map should only be called for elements actually consumed
+	count := 0
+	result := stream.SliceOf(1, 2, 3, 4, 5).
+		Map(func(n int) int { count++; return n * 2 }).
+		Limit(2).
+		ToSlice()
+	if len(result) != 2 {
+		t.Fatalf("expected 2 elements, got %d", len(result))
+	}
+	if result[0] != 2 || result[1] != 4 {
+		t.Fatalf("expected [2, 4], got %v", result)
+	}
+	if count > 3 {
+		t.Fatalf("expected at most 3 Map calls (lazy), got %d", count)
+	}
+}
+
+func TestStream_Seq(t *testing.T) {
+	sum := 0
+	for v := range stream.SliceOf(1, 2, 3).Seq() {
+		sum += v
+	}
+	if sum != 6 {
+		t.Fatalf("expected 6, got %d", sum)
+	}
+}
+
+func TestStream_FromSeq(t *testing.T) {
+	seq := func(yield func(int) bool) {
+		for i := 1; i <= 3; i++ {
+			if !yield(i) {
+				return
+			}
+		}
+	}
+	result := stream.FromSeq(seq, 3).Map(func(n int) int { return n * 10 }).ToSlice()
+	if len(result) != 3 || result[0] != 10 || result[1] != 20 || result[2] != 30 {
+		t.Fatalf("expected [10, 20, 30], got %v", result)
+	}
+}
+
+func TestStream_FlatMap(t *testing.T) {
+	result := stream.SliceOf(1, 2, 3).
+		FlatMap(func(n int) stream.Streamer[any] {
+			return stream.SliceOf[any](n, n*10)
+		}).ToSlice()
+	if len(result) != 6 {
+		t.Fatalf("expected 6 elements, got %d: %v", len(result), result)
+	}
+	if result[0] != 1 || result[1] != 10 || result[2] != 2 || result[3] != 20 || result[4] != 3 || result[5] != 30 {
+		t.Fatalf("expected [1, 10, 2, 20, 3, 30], got %v", result)
+	}
+}
+
+func TestStream_ShortCircuit(t *testing.T) {
+	// AllMatch should short-circuit on first non-match
+	count := 0
+	ok := stream.SliceOf(1, 2, 3, 4, 5).AllMatch(func(n int) bool {
+		count++
+		return n < 3
+	})
+	if ok {
+		t.Fatal("expected false")
+	}
+	if count != 3 {
+		t.Fatalf("expected 3 checks (short-circuit at 3), got %d", count)
+	}
+}
+
