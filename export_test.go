@@ -45,19 +45,18 @@ func TestStream(t *testing.T) {
 
 func TestStream_1(t *testing.T) {
 	array := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
-	stage := stream.SliceOf(array...)
-	fmt.Println("stream First: ", stage.First())
-	fmt.Println("stream Take: ", stage.Take())
-	fmt.Println("stream Last: ", stage.Last())
-	fmt.Println("stream ToSlice: ", stage.ToSlice())
-	fmt.Println("stream Reverse: ", stage.Reverse().ToSlice())
-	fmt.Println("stream Limit: ", stage.Limit(8).ToSlice())
-	fmt.Println("stream Skip: ", stage.Skip(1).ToSlice())
-	fmt.Println("stream Pick: ", stage.Pick(0, 8, 2).ToSlice())
-	fmt.Println("stream Pick: ", stage.Pick(1, 9, 2).ToSlice())
-	fmt.Println("stream Pick: ", stage.Pick(1, 99, 2).ToSlice())
-	fmt.Println("stream Pick: ", stage.Pick(1, -1, 2).ToSlice())
-	result := stage.Reduce(func(result, data int) int {
+	fmt.Println("stream First: ", stream.SliceOf(array...).First())
+	fmt.Println("stream Take: ", stream.SliceOf(array...).Take())
+	fmt.Println("stream Last: ", stream.SliceOf(array...).Last())
+	fmt.Println("stream ToSlice: ", stream.SliceOf(array...).ToSlice())
+	fmt.Println("stream Reverse: ", stream.SliceOf(array...).Reverse().ToSlice())
+	fmt.Println("stream Limit: ", stream.SliceOf(array...).Limit(8).ToSlice())
+	fmt.Println("stream Skip: ", stream.SliceOf(array...).Skip(1).ToSlice())
+	fmt.Println("stream Pick: ", stream.SliceOf(array...).Pick(0, 8, 2).ToSlice())
+	fmt.Println("stream Pick: ", stream.SliceOf(array...).Pick(1, 9, 2).ToSlice())
+	fmt.Println("stream Pick: ", stream.SliceOf(array...).Pick(1, 99, 2).ToSlice())
+	fmt.Println("stream Pick: ", stream.SliceOf(array...).Pick(1, -1, 2).ToSlice())
+	result := stream.SliceOf(array...).Reduce(func(result, data int) int {
 		return result + data
 	})
 	fmt.Println("stream Reduce sum: ", result)
