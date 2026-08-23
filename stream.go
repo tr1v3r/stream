@@ -147,18 +147,38 @@ func (s *streamer[T]) Map(m types.Mapper[T]) Streamer[T] {
 }
 
 func (s *streamer[T]) Convert(convert types.Converter[T, any]) Streamer[any] {
-	prev := s.seq
-	parallel := s.parallelSize
-	return &streamer[any]{ctx: s.ctx, seq: func(yield func(any) bool) {
+	return MapTo(s, convert)
+}
+
+// MapTo transforms each element of s from T to R, preserving ctx, sizeHint
+// and parallelSize. Unlike Convert it keeps the result type, so no
+// Streamer[any] round-trip with type assertions is needed:
+//
+//	names := stream.MapTo(stream.SliceOf(1, 2, 3), func(n int) string {
+//	    return fmt.Sprintf("#%d", n)
+//	}).ToSlice()
+func MapTo[T, R any](s Streamer[T], m types.Converter[T, R]) Streamer[R] {
+	st, ok := s.(*streamer[T])
+	if !ok {
+		return From(func(yield func(R) bool) {
+			for v := range s.Seq() {
+				if !yield(m(v)) {
+					return
+				}
+			}
+		}, -1)
+	}
+	prev := st.seq
+	return &streamer[R]{ctx: st.ctx, seq: func(yield func(R) bool) {
 		for v := range prev {
-			if s.cancelled() {
+			if st.cancelled() {
 				return
 			}
-			if !yield(convert(v)) {
+			if !yield(m(v)) {
 				return
 			}
 		}
-	}, sizeHint: s.sizeHint, parallelSize: parallel}
+	}, sizeHint: st.sizeHint, parallelSize: st.parallelSize}
 }
 
 func (s *streamer[T]) Peek(consumer types.Consumer[T]) Streamer[T] {
@@ -496,13 +516,25 @@ func (s *streamer[T]) First() T {
 	return zero
 }
 
+// Take returns a uniformly-sampled element without materializing the whole
+// stream: reservoir sampling keeps O(1) memory (a single slot here) and works
+// on infinite streams, terminating as soon as the source is exhausted or
+// cancelled. On an empty stream it returns the zero value of T.
 func (s *streamer[T]) Take() T {
-	data := materialize(s.seq)
-	if len(data) == 0 {
-		var zero T
-		return zero
+	var pick T
+	seen := int64(0)
+	for v := range s.seq {
+		if s.cancelled() {
+			return pick
+		}
+		seen++
+		// first element seeds the reservoir, later ones replace it with
+		// probability 1/seen — every element ends up equally likely
+		if seen == 1 || rand.Int64N(seen) == 0 {
+			pick = v
+		}
 	}
-	return data[rand.IntN(len(data))]
+	return pick
 }
 
 func (s *streamer[T]) Any() T { return s.Take() }

@@ -57,6 +57,14 @@ func BenchmarkDistinctBy(b *testing.B) {
 	}
 }
 
+func BenchmarkTake(b *testing.B) {
+	data := makeUnsorted(100000)
+	b.ResetTimer()
+	for b.Loop() {
+		stream.SliceOf(data...).Take() // reservoir sampling, O(1) memory
+	}
+}
+
 func BenchmarkPipeline(b *testing.B) {
 	src := makeUnsorted(20000)
 	b.ResetTimer()

@@ -16,6 +16,11 @@ type Streamer[T any] interface {
 	// Filter filter data by Judge result
 	Filter(types.Judge[T]) Streamer[T]
 	Map(types.Mapper[T]) Streamer[T]
+	// Convert transforms elements to any. Deprecated: it loses the element
+	// type and forces type assertions downstream; use the generic
+	// stream.MapTo[T, R] instead. Kept for backward compatibility.
+	//
+	// Deprecated: use MapTo.
 	Convert(types.Converter[T, any]) Streamer[any]
 	Peek(types.Consumer[T]) Streamer[T]
 	// FlatMap flattens each element to a sub-stream and concatenates

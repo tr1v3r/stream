@@ -2,7 +2,9 @@ package stream_test
 
 import (
 	"context"
+	"fmt"
 	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/tr1v3r/stream"
@@ -164,5 +166,71 @@ func TestBranch_DistinctByForeignStreamer(t *testing.T) {
 	got := stream.DistinctBy(w, func(n int) int { return n }).ToSlice()
 	if !slices.Equal(got, []int{1, 2, 3}) {
 		t.Fatalf("foreign impl fallback: expected [1 2 3], got %v", got)
+	}
+}
+
+func TestBranch_MapTo(t *testing.T) {
+	got := stream.MapTo(stream.SliceOf(1, 2, 3), func(n int) string {
+		return fmt.Sprintf("#%d", n)
+	}).ToSlice()
+	if !slices.Equal(got, []string{"#1", "#2", "#3"}) {
+		t.Fatalf("expected [#1 #2 #3], got %v", got)
+	}
+
+	// sizeHint + short-circuit preserved
+	if n := stream.MapTo(stream.SliceOf(1, 2, 3), func(n int) bool { return n > 1 }).Count(); n != 3 {
+		t.Fatalf("expected Count 3 via preserved sizeHint, got %d", n)
+	}
+	if got := stream.MapTo(stream.SliceOf(1, 2, 3, 4), func(n int) int { return n * 10 }).First(); got != 10 {
+		t.Fatalf("expected early exit first 10, got %d", got)
+	}
+
+	// foreign Streamer implementation goes through the Seq fallback
+	w := wrappedStreamer{Streamer: stream.SliceOf(1, 2)}
+	got2 := stream.MapTo(w, strconv.Itoa).ToSlice()
+	if !slices.Equal(got2, []string{"1", "2"}) {
+		t.Fatalf("foreign fallback: expected [1 2], got %v", got2)
+	}
+	// ...and its short-circuit path stops pulling the source
+	if got := stream.MapTo(wrappedStreamer{Streamer: stream.SliceOf(1, 2, 3)}, strconv.Itoa).First(); got != "1" {
+		t.Fatalf("foreign fallback short-circuit: expected \"1\", got %q", got)
+	}
+
+	// Convert now delegates to MapTo
+	if got := stream.SliceOf(1, 2).Convert(func(i int) any { return i * 10 }).ToSlice(); len(got) != 2 {
+		t.Fatalf("Convert delegation broken, got %v", got)
+	}
+}
+
+func TestBranch_TakeReservoir(t *testing.T) {
+	// empty stream: zero value, no panic
+	if got := stream.SliceOf[int]().Take(); got != 0 {
+		t.Fatalf("empty Take must be zero value, got %d", got)
+	}
+	// single / small streams: element of the source
+	if got := stream.SliceOf(7).Take(); got != 7 {
+		t.Fatalf("single-element Take must return it, got %d", got)
+	}
+	src := []int{1, 2, 3}
+	for range 20 {
+		if got := stream.SliceOf(src...).Take(); !slices.Contains(src, got) {
+			t.Fatalf("Take must return a member, got %d", got)
+		}
+	}
+	// distribution over members must be roughly uniform (reservoir sampling)
+	counts := map[int]int{}
+	for range 3000 {
+		counts[stream.SliceOf(src...).Take()]++
+	}
+	for _, v := range src {
+		if counts[v] < 700 { // ~1000 expected, generous floor
+			t.Fatalf("distribution not uniform: counts %v", counts)
+		}
+	}
+	// pre-cancelled stream: zero value without consuming
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := stream.SliceOf(1, 2, 3).WithContext(ctx).Take(); got != 0 {
+		t.Fatalf("cancelled Take must return zero value, got %d", got)
 	}
 }
