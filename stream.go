@@ -157,6 +157,12 @@ func (s *streamer[T]) Convert(convert types.Converter[T, any]) Streamer[any] {
 //	names := stream.MapTo(stream.SliceOf(1, 2, 3), func(n int) string {
 //	    return fmt.Sprintf("#%d", n)
 //	}).ToSlice()
+//
+// As a package function it interrupts method chaining at the type-changing
+// point; Convert chains fluently but erases the element type. Prefer MapTo,
+// especially for head-of-pipeline type changes where chaining resumes right
+// below it; Convert stays acceptable for mid-chain changes despite being
+// deprecated.
 func MapTo[T, R any](s Streamer[T], m types.Converter[T, R]) Streamer[R] {
 	st, ok := s.(*streamer[T])
 	if !ok {
