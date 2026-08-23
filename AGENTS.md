@@ -85,6 +85,10 @@ golangci-lint run --config=.golangci.yml
 
 - None currently. Historical issues (parallel goroutine leak, seededRand race, empty-stream Take panic, negative Pick index, parallel Distinct crash, Execute dropping parallelSize) are fixed and guarded by regression tests in `parallel_test.go` / `export_test.go`.
 
+## Deliberate Trade-offs
+
+- **Leak detection stays NumGoroutine-based (no goleak)**: `TestParallel_ShortCircuitNoLeak` polls `runtime.NumGoroutine` with a 5s deadline instead of using `go.uber.org/goleak` stack-snapshot comparison. Decision: the zero-dependency property (empty go.sum) outweighs the precision gain — the single concurrency primitive (`parallelSeq`) has one deterministic leak test, verified stable across 10+ local runs. Re-evaluate when the parallel architecture v2 lands (more goroutine paths would justify goleak or a hand-rolled ~40-line `runtime.Stack` diff).
+
 ## Common Development Tasks
 
 When adding new stream operations:
