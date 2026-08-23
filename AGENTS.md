@@ -68,7 +68,7 @@ golangci-lint run --config=.golangci.yml
 - **Lazy evaluation**: Intermediate operations compose closures without executing. `Limit(1)` + `First()` on a million elements processes only 1 element.
 - **Distinct uses `fmt.Sprint`** for hashing by default (`1` and `"1"` collide). Implement `types.Unique` for custom hash keys.
 - **`Convert` and `FlatMap` produce `Streamer[any]`**: Type info is lost; use `AnyTo[T]()` or `To[T, R]()` to convert back.
-- **Parallel mode does not preserve order**. Also note: only `Filter`/`Map`/`Peek` have parallel branches — `Convert`, `FlatMap`, `Sort`, `Reverse` silently ignore `Parallel(n)`.
+- **Parallel mode does not preserve order**. Also note: only `Filter`/`Map`/`Peek` have parallel branches — `Convert`, `FlatMap`, `Sort`, `Reverse`, and `Distinct` (serial by design, see stream.go) silently ignore `Parallel(n)`.
 - **Each parallel-aware op spawns its own worker pool**: `Parallel(4).Filter(...).Map(...)` = two chained pools; keep pipelines short or expect overhead.
 - **`Pick` with negative `end`** must materialize the entire stream to determine size.
 
@@ -84,8 +84,6 @@ golangci-lint run --config=.golangci.yml
 ## Known Issues (verified by repro, fix before relying on them)
 
 - **Goroutine leak in parallel short-circuit**: `parallelSeq` (`stream.go`) only unblocks workers on `ctx` cancellation; when a downstream `yield` returns false (e.g. `Limit` after `Parallel(n)`), feeder/workers block forever on channel sends under `context.Background`. Fix direction: derive a `context.WithCancel` inside `parallelSeq` and `defer cancel()`.
-- **`Take()`/`Any()` panic on empty stream**: `seededRand.Int63n(0)` — needs a `len(data) == 0` guard returning the zero value.
-- **`Pick` with negative `start` and negative `end`**: hits `data[start]` with negative index → panic.
 - **Global `seededRand` is not concurrency-safe**: concurrent `Take()` calls race.
 - **`ErrUnsupportType` (`errors.go`) is dead code** — unused.
 - **`tests/test_1.go` `Question1Sub2` comparator bug**: `left.ID > right.ID` returns `-1` (should be `1`).

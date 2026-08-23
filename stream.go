@@ -196,7 +196,23 @@ func (s *streamer[T]) FlatMap(f func(T) Streamer[any]) Streamer[any] {
 	}, sizeHint: -1}
 }
 
-func (s *streamer[T]) Distinct() Streamer[T] { return s.Filter(distinctJudge[T]()) }
+// Distinct always runs serially: distinctJudge's shared key map is not
+// concurrency-safe, so it bypasses Filter's parallel branch even when
+// parallelSize > 0.
+func (s *streamer[T]) Distinct() Streamer[T] {
+	judge := distinctJudge[T]()
+	prev := s.seq
+	return s.wrap(func(yield func(T) bool) {
+		for v := range prev {
+			if s.cancelled() {
+				return
+			}
+			if judge(v) && !yield(v) {
+				return
+			}
+		}
+	}, -1)
+}
 
 func (s *streamer[T]) Sort(comparator types.Comparator[T]) Streamer[T] {
 	prev := s.seq
@@ -294,6 +310,9 @@ func (s *streamer[T]) Pick(start, end, interval int) Streamer[T] {
 				end = int(s.sizeHint) - 1
 			} else {
 				data := materialize(prev)
+				if start < 0 || interval <= 0 {
+					return
+				}
 				for i := start; i < len(data); i += interval {
 					if !yield(data[i]) {
 						return
@@ -454,6 +473,10 @@ func (s *streamer[T]) First() T {
 
 func (s *streamer[T]) Take() T {
 	data := materialize(s.seq)
+	if len(data) == 0 {
+		var zero T
+		return zero
+	}
 	return data[seededRand.Int63n(int64(len(data)))]
 }
 

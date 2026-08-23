@@ -132,3 +132,38 @@ func TestStream_ShortCircuit(t *testing.T) {
 	}
 }
 
+func TestStream_TakeEmpty(t *testing.T) {
+	if v := stream.SliceOf[int]().Take(); v != 0 {
+		t.Fatalf("expected zero value from Take on empty stream, got %v", v)
+	}
+	if v := stream.SliceOf[int]().Any(); v != 0 {
+		t.Fatalf("expected zero value from Any on empty stream, got %v", v)
+	}
+}
+
+func TestStream_PickNegativeStart(t *testing.T) {
+	seq := func(yield func(int) bool) {
+		for i := 1; i <= 3; i++ {
+			if !yield(i) {
+				return
+			}
+		}
+	}
+	// Unknown sizeHint with negative start must not panic
+	got := stream.From(seq, -1).Pick(-1, -1, 1).ToSlice()
+	if len(got) != 0 {
+		t.Fatalf("expected empty result for negative start, got %v", got)
+	}
+}
+
+func TestStream_ParallelDistinct(t *testing.T) {
+	data := make([]int, 0, 20000)
+	for i := 0; i < 20000; i++ {
+		data = append(data, i%1000)
+	}
+	got := stream.SliceOf(data...).Parallel(4).Distinct().ToSlice()
+	if len(got) != 1000 {
+		t.Fatalf("expected 1000 unique elements, got %d", len(got))
+	}
+}
+
