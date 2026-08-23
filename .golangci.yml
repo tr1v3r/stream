@@ -9,16 +9,16 @@ run:
 
 # Linters configuration
 linters:
-  # Enable specific linters
+  # v2 defaults kept explicit: errcheck, govet, ineffassign, staticcheck, unused
   enable:
-    # Code quality
+    # Code quality (v2 defaults, explicit for stability across major versions)
     - errcheck
     - govet
     - ineffassign
     - staticcheck
     - unused
 
-    # Style and formatting
+    # Style and simplification
     - gocritic
     - gocyclo
     - misspell
@@ -26,11 +26,9 @@ linters:
     - unconvert
     - unparam
 
-    # Performance
-    - bodyclose
+    # Correctness and safety
+    - gosec
     - nilerr
-    - noctx
-    - rowserrcheck
 
     # Additional checks
     - dupl
@@ -38,22 +36,26 @@ linters:
     - goconst
     - nestif
 
-  # All available settings of specific linters
+    # Modernization guards (keep code at current Go idioms)
+    - copyloopvar
+    - intrange
+
+    # Performance (fits a performance-sensitive library)
+    - perfsprint
+
   settings:
-    # Security checks
     gosec:
-      # Exclude weak random number generator warnings for non-cryptographic use
+      # math/rand/v2 in Take() is intentionally non-cryptographic
       excludes:
         - G404
 
   exclusions:
-    # Which dirs to skip
+    # Exercise-style scratch dir, not library code
     paths:
       - tests
-      - vendor
 
     rules:
-      # Exclude some linters from running on tests files
+      # Relax noisy linters on test files
       - path: _test\.go
         linters:
           - gocyclo
@@ -62,24 +64,7 @@ linters:
           - gosec
           - funlen
 
-      # Exclude unused function in helper files
-      - path: helper\.go
-        linters:
-          - unused
-
-      # Exclude variable declarations that are explicit for clarity in generic code
-      - linters:
-          - staticcheck
-        text: "ST1023"
-
-      # Exclude weak random number generator warnings for non-cryptographic use
-      - linters:
-          - gosec
-        text: "G404"
-
 issues:
-  # Maximum issues count per one linter. Set to 0 to disable
+  # Show every issue instead of truncating (0 disables the limits)
   max-issues-per-linter: 0
-
-  # Maximum count of issues with the same text. Set to 0 to disable
   max-same-issues: 0
