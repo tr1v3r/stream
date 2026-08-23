@@ -67,7 +67,7 @@ golangci-lint run --config=.golangci.yml
 - **Streams are single-use**: A terminal operation consumes the underlying `iter.Seq`. Create a new stream for each pipeline.
 - **Lazy evaluation**: Intermediate operations compose closures without executing. `Limit(1)` + `First()` on a million elements processes only 1 element.
 - **Distinct uses `fmt.Sprint`** for hashing by default (`1` and `"1"` collide). Implement `types.Unique` for custom hash keys, or prefer the generic `DistinctBy[T, K comparable]` for exact keys (also much faster: no boxing).
-- **`Convert` and `FlatMap` produce `Streamer[any]`**: Type info is lost; prefer the generic `stream.MapTo[T, R]` (Convert is deprecated and delegates to it) — for FlatMap, use `AnyTo[T]()` or `To[T, R]()` to convert back.
+- **`Convert` and `FlatMap` produce `Streamer[any]`**: Type info is lost; prefer the generic `stream.MapTo[T, R]` (Convert is deprecated and delegates to it). Trade-off: MapTo is a function, so it interrupts method chaining at the type-changing point — recommend it for head-of-pipeline type changes (chaining resumes below); Convert stays acceptable for mid-chain changes in throwaway code. For FlatMap, use `AnyTo[T]()` or `To[T, R]()` to convert back.
 - **Parallel mode does not preserve order**. Also note: only `Filter`/`Map`/`Peek` have parallel branches — `Convert`, `FlatMap`, `Sort`, `Reverse`, and `Distinct` (serial by design, see stream.go) silently ignore `Parallel(n)`.
 - **Each parallel-aware op spawns its own worker pool**: `Parallel(4).Filter(...).Map(...)` = two chained pools; keep pipelines short or expect overhead.
 - **`Pick` with negative `end`** must materialize the entire stream to determine size.

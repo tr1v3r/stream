@@ -78,6 +78,32 @@ All intermediate operations are lazy — they compose closures without processin
 
 Package-level generic (methods cannot add type parameters): `stream.MapTo[T, R](s, func(T) R) Streamer[R]` — the type-safe replacement for `Convert`.
 
+### When to use MapTo vs Convert
+
+`MapTo` keeps the result type at compile time — no `Streamer[any]` round-trip, no `Collect(AnyTo[T]())` assertion that can panic at runtime. The trade-off: as a function it interrupts method chaining at the type-changing point, while `Convert` chains fluently but erases types.
+
+```go
+// MapTo: type-safe, result is Streamer[string] — recommended default
+names := stream.MapTo(stream.SliceOf(1, 2, 3), func(n int) string {
+    return fmt.Sprintf("#%d", n)
+})
+
+// Head-of-pipeline type change: MapTo costs nothing — chain continues below it
+stream.MapTo(stream.SliceOf(employees...), func(e *Employee) Dept { return e.Dept }).
+    Filter(func(d Dept) bool { return d.Active }).  // normal chaining resumes
+    Map(func(d Dept) string { return d.Name })
+
+// Mid-pipeline type change in a long chain: Convert keeps it readable,
+// at the cost of any + a runtime assertion to come back
+stream.SliceOf(1, 2, 3, 4).
+    Filter(func(n int) bool { return n > 2 }).
+    Convert(func(n int) any { return float64(n) * 1.5 }).
+    Map(func(x any) any { return x }).              // still Streamer[any] down here
+    Collect(stream.AnyTo[float64]()).([]float64)     // runtime type assertion
+```
+
+Rule of thumb: prefer `MapTo` (type change at the pipeline head, or safety matters more than fluency); `Convert` remains valid for mid-chain type changes in throwaway code — it is deprecated, not removed, and still works. When Go ships generic methods, a `Map[R](func(T) R) Streamer[R]` method can offer both.
+
 ```go
 stream.SliceOf(1, 2, 3, 4).
     Filter(func(n int) bool { return n > 2 }).   // [3, 4]
