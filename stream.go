@@ -31,6 +31,12 @@ type streamer[T any] struct {
 	seq          iter.Seq[T]
 	sizeHint     int64 // known size, or -1 for unknown
 	parallelSize int   // 0=sync, >0=parallel workers
+
+	// fused accumulates the stateless stages of the currently open parallel
+	// section (proposal docs/proposals/parallel-v2.md). It is nil in serial
+	// mode and until a parallel section opens; flushFused turns it into the
+	// section's single-pool execution boundary.
+	fused func(T) (T, bool)
 }
 
 func newStreamer[T any](seq iter.Seq[T], sizeHint int64) *streamer[T] {
@@ -45,42 +51,97 @@ func (s streamer[T]) WithContext(ctx context.Context) Streamer[T] {
 	return &s
 }
 
-// parallelSeq fans out elements to N workers and collects results.
-// It derives a cancellable child context so that an early consumer exit
-// (short-circuit) or parent cancellation releases the feeder, workers,
-// and closer goroutines instead of leaking them.
-func (s *streamer[T]) parallelSeq(work func(T, chan<- T)) iter.Seq[T] {
+// thenFused returns the fused-stage composition of s with next appended.
+// Filters compose as short-circuit drops; Map/Peek as transforms.
+func (s *streamer[T]) thenFused(next func(T) (T, bool)) func(T) (T, bool) {
+	if s.fused == nil {
+		return next
+	}
+	prev := s.fused
+	return func(t T) (T, bool) {
+		v, ok := prev(t)
+		if !ok {
+			var zero T
+			return zero, false
+		}
+		return next(v)
+	}
+}
+
+// parallelBatchSize is the feeder's batching granularity: amortizes channel
+// and scheduling cost across the batch (proposal 3.2, gate A1).
+const parallelBatchSize = 64
+
+// fusedFeeder pulls upstream into the feeder goroutine and emits
+// parallelBatchSize batches on in, stopping on ctx cancellation.
+func fusedFeeder[T any](ctx context.Context, prev iter.Seq[T], in chan<- []T, batch int) {
+	defer close(in)
+	buf := make([]T, 0, batch)
+	flush := func() {
+		if len(buf) > 0 {
+			in <- buf
+			buf = make([]T, 0, batch)
+		}
+	}
+	defer flush()
+	for v := range prev {
+		if ctx.Err() != nil {
+			return
+		}
+		buf = append(buf, v)
+		if len(buf) == batch {
+			flush()
+		}
+	}
+}
+
+// fusedWorkers runs n workers applying stage to whole batches from in onto
+// out. After cancellation workers keep draining in (discarding) so the
+// feeder never blocks forever.
+func fusedWorkers[T any](ctx context.Context, stage func(T) (T, bool), in <-chan []T, out chan<- []T, n int, wg *sync.WaitGroup) {
+	for range n {
+		wg.Go(func() {
+			for items := range in {
+				if ctx.Err() != nil {
+					continue // cancelled: discard, keep draining
+				}
+				res := make([]T, 0, len(items))
+				for _, v := range items {
+					if r, ok := stage(v); ok {
+						res = append(res, r)
+					}
+				}
+				if len(res) > 0 {
+					out <- res
+				}
+			}
+		})
+	}
+}
+
+// flushFused materializes the open parallel section as a single worker-pool
+// stage: one feeder, n workers applying the fused function, one consumer —
+// reusing the leak-free cancel/drain pattern. Elements flow in
+// parallelBatchSize batches to amortize channel machinery; the consumer
+// un-batches before yielding. After the flush the streamer keeps
+// parallelSize so a following Parallel call or stateless op can open a
+// new section.
+func (s *streamer[T]) flushFused() *streamer[T] {
+	stage := s.fused
 	prev := s.seq
 	n := s.parallelSize
-	return func(yield func(T) bool) {
+	next := &streamer[T]{ctx: s.ctx, sizeHint: s.sizeHint, parallelSize: s.parallelSize}
+	next.seq = func(yield func(T) bool) {
 		ctx, cancel := context.WithCancel(s.ctx)
 		defer cancel()
 
-		in := make(chan T, 1024)
-		out := make(chan T, 1024)
+		in := make(chan []T, n)
+		out := make(chan []T, n)
 
-		go func() {
-			defer close(in)
-			for v := range prev {
-				if ctx.Err() != nil {
-					return
-				}
-				in <- v // workers always drain in, even after cancellation
-			}
-		}()
+		go fusedFeeder(ctx, prev, in, parallelBatchSize)
 
 		var wg sync.WaitGroup
-		for range n {
-			wg.Go(func() {
-				for v := range in {
-					if ctx.Err() != nil {
-						continue // cancelled: discard, keep draining so the feeder never blocks
-					}
-					work(v, out)
-				}
-			})
-		}
-
+		fusedWorkers(ctx, stage, in, out, n, &wg)
 		go func() {
 			wg.Wait()
 			close(out)
@@ -95,26 +156,50 @@ func (s *streamer[T]) parallelSeq(work func(T, chan<- T)) iter.Seq[T] {
 			}
 		}()
 
-		for v := range out {
-			if ctx.Err() != nil || !yield(v) {
-				return
+		for items := range out {
+			for _, v := range items {
+				if ctx.Err() != nil || !yield(v) {
+					return
+				}
 			}
 		}
 	}
+	return next
+}
+
+// ensureFlushed closes any open parallel section before a stage that cannot
+// fuse (stateful ops, type changes, terminals, section re-open) executes.
+func (s *streamer[T]) ensureFlushed() *streamer[T] {
+	if s.fused == nil {
+		return s
+	}
+	return s.flushFused()
+}
+
+// effectiveSeq is the sequence terminal operations iterate: any open
+// parallel section is flushed into its single-pool stage first.
+func (s *streamer[T]) effectiveSeq() iter.Seq[T] {
+	return s.ensureFlushed().seq
 }
 
 func (s *streamer[T]) wrap(newSeq iter.Seq[T], newHint int64) *streamer[T] {
 	return &streamer[T]{ctx: s.ctx, seq: newSeq, sizeHint: newHint, parallelSize: s.parallelSize}
 }
 
-// Filter implements Streamer.Filter; in parallel mode the judge runs on workers and order is not preserved.
+// Filter implements Streamer.Filter. In a parallel section the judge fuses
+// into the section's single stage (one pool per section); order is not
+// preserved.
 func (s *streamer[T]) Filter(judge types.Judge[T]) Streamer[T] {
 	if s.parallelSize > 0 {
-		return s.wrap(s.parallelSeq(func(t T, ch chan<- T) {
+		next := &streamer[T]{ctx: s.ctx, seq: s.seq, sizeHint: -1, parallelSize: s.parallelSize}
+		next.fused = s.thenFused(func(t T) (T, bool) {
 			if judge(t) {
-				ch <- t
+				return t, true
 			}
-		}), -1)
+			var zero T
+			return zero, false
+		})
+		return next
 	}
 	prev := s.seq
 	return s.wrap(func(yield func(T) bool) {
@@ -129,12 +214,13 @@ func (s *streamer[T]) Filter(judge types.Judge[T]) Streamer[T] {
 	}, -1)
 }
 
-// Map implements Streamer.Map; in parallel mode m runs on workers and order is not preserved.
+// Map implements Streamer.Map. In a parallel section m fuses into the
+// section's single stage; order is not preserved.
 func (s *streamer[T]) Map(m types.Mapper[T]) Streamer[T] {
 	if s.parallelSize > 0 {
-		return s.wrap(s.parallelSeq(func(t T, ch chan<- T) {
-			ch <- m(t)
-		}), s.sizeHint)
+		next := &streamer[T]{ctx: s.ctx, seq: s.seq, sizeHint: s.sizeHint, parallelSize: s.parallelSize}
+		next.fused = s.thenFused(func(t T) (T, bool) { return m(t), true })
+		return next
 	}
 	prev := s.seq
 	return s.wrap(func(yield func(T) bool) {
@@ -178,7 +264,7 @@ func MapTo[T, R any](s Streamer[T], m types.Converter[T, R]) Streamer[R] {
 			}
 		}, -1)
 	}
-	prev := st.seq
+	prev := st.ensureFlushed().seq // type change closes the parallel section
 	return &streamer[R]{ctx: st.ctx, seq: func(yield func(R) bool) {
 		for v := range prev {
 			if st.cancelled() {
@@ -191,13 +277,16 @@ func MapTo[T, R any](s Streamer[T], m types.Converter[T, R]) Streamer[R] {
 	}, sizeHint: st.sizeHint, parallelSize: st.parallelSize}
 }
 
-// Peek implements Streamer.Peek; in parallel mode consumer runs on workers and order is not preserved.
+// Peek implements Streamer.Peek. In a parallel section consumer fuses into
+// the section's single stage; order is not preserved.
 func (s *streamer[T]) Peek(consumer types.Consumer[T]) Streamer[T] {
 	if s.parallelSize > 0 {
-		return s.wrap(s.parallelSeq(func(t T, ch chan<- T) {
+		next := &streamer[T]{ctx: s.ctx, seq: s.seq, sizeHint: s.sizeHint, parallelSize: s.parallelSize}
+		next.fused = s.thenFused(func(t T) (T, bool) {
 			consumer(t)
-			ch <- t
-		}), s.sizeHint)
+			return t, true
+		})
+		return next
 	}
 	prev := s.seq
 	return s.wrap(func(yield func(T) bool) {
@@ -213,9 +302,9 @@ func (s *streamer[T]) Peek(consumer types.Consumer[T]) Streamer[T] {
 	}, s.sizeHint)
 }
 
-// FlatMap implements Streamer.FlatMap; sub-streams are drained in order, sequentially.
+// FlatMap implements Streamer.FlatMap; sub-streams are drained in order, sequentially. A parallel section closes first.
 func (s *streamer[T]) FlatMap(f func(T) Streamer[any]) Streamer[any] {
-	prev := s.seq
+	prev := s.ensureFlushed().seq
 	return &streamer[any]{ctx: s.ctx, seq: func(yield func(any) bool) {
 		for v := range prev {
 			if s.cancelled() {
@@ -261,7 +350,7 @@ func DistinctBy[T any, K comparable](s Streamer[T], key func(T) K) Streamer[T] {
 	if !ok {
 		return s.Filter(judge) // foreign Streamer implementations
 	}
-	prev := st.seq
+	prev := st.ensureFlushed().seq
 	return st.wrap(func(yield func(T) bool) {
 		for v := range prev {
 			if st.cancelled() {
@@ -274,9 +363,9 @@ func DistinctBy[T any, K comparable](s Streamer[T], key func(T) K) Streamer[T] {
 	}, -1)
 }
 
-// Sort implements Streamer.Sort via slices.SortFunc; materializes the stage when iterated.
+// Sort implements Streamer.Sort via slices.SortFunc; materializes the stage when iterated. A parallel section closes first.
 func (s *streamer[T]) Sort(comparator types.Comparator[T]) Streamer[T] {
-	prev := s.seq
+	prev := s.ensureFlushed().seq
 	hint := s.sizeHint
 	return s.wrap(func(yield func(T) bool) {
 		data := materialize(prev)
@@ -289,9 +378,9 @@ func (s *streamer[T]) Sort(comparator types.Comparator[T]) Streamer[T] {
 	}, hint)
 }
 
-// ReverseSort implements Streamer.ReverseSort via slices.SortFunc with inverted comparator.
+// ReverseSort implements Streamer.ReverseSort via slices.SortFunc with inverted comparator. A parallel section closes first.
 func (s *streamer[T]) ReverseSort(comparator types.Comparator[T]) Streamer[T] {
-	prev := s.seq
+	prev := s.ensureFlushed().seq
 	hint := s.sizeHint
 	return s.wrap(func(yield func(T) bool) {
 		data := materialize(prev)
@@ -304,9 +393,9 @@ func (s *streamer[T]) ReverseSort(comparator types.Comparator[T]) Streamer[T] {
 	}, hint)
 }
 
-// Reverse implements Streamer.Reverse by materializing and reversing in place.
+// Reverse implements Streamer.Reverse by materializing and reversing in place. A parallel section closes first.
 func (s *streamer[T]) Reverse() Streamer[T] {
-	prev := s.seq
+	prev := s.ensureFlushed().seq
 	hint := s.sizeHint
 	return s.wrap(func(yield func(T) bool) {
 		data := materialize(prev)
@@ -319,9 +408,9 @@ func (s *streamer[T]) Reverse() Streamer[T] {
 	}, hint)
 }
 
-// Limit implements Streamer.Limit; stops pulling upstream once the count is reached.
+// Limit implements Streamer.Limit; stops pulling upstream once the count is reached. A parallel section closes first.
 func (s *streamer[T]) Limit(l int64) Streamer[T] {
-	prev := s.seq
+	prev := s.ensureFlushed().seq
 	newHint := l
 	if s.sizeHint >= 0 && s.sizeHint < l {
 		newHint = s.sizeHint
@@ -340,9 +429,9 @@ func (s *streamer[T]) Limit(l int64) Streamer[T] {
 	}, newHint)
 }
 
-// Skip implements Streamer.Skip; discards the first n elements before yielding.
+// Skip implements Streamer.Skip; discards the first n elements before yielding. A parallel section closes first.
 func (s *streamer[T]) Skip(n int64) Streamer[T] {
-	prev := s.seq
+	prev := s.ensureFlushed().seq
 	newHint := int64(-1)
 	if s.sizeHint >= 0 {
 		newHint = max(s.sizeHint-n, 0)
@@ -364,9 +453,9 @@ func (s *streamer[T]) Skip(n int64) Streamer[T] {
 	}, newHint)
 }
 
-// Pick implements Streamer.Pick over absolute indices with interval stepping.
+// Pick implements Streamer.Pick over absolute indices with interval stepping. A parallel section closes first.
 func (s *streamer[T]) Pick(start, end, interval int) Streamer[T] {
-	prev := s.seq
+	prev := s.ensureFlushed().seq
 	return s.wrap(func(yield func(T) bool) {
 		if start < 0 || interval <= 0 {
 			return
@@ -401,9 +490,9 @@ func (s *streamer[T]) Pick(start, end, interval int) Streamer[T] {
 	}, -1)
 }
 
-// Append implements Streamer.Append; yields upstream first, then data.
+// Append implements Streamer.Append; yields upstream first, then data. A parallel section closes first.
 func (s *streamer[T]) Append(data ...T) Streamer[T] {
-	prev := s.seq
+	prev := s.ensureFlushed().seq
 	newHint := s.sizeHint + int64(len(data))
 	if s.sizeHint < 0 {
 		newHint = -1
@@ -424,23 +513,27 @@ func (s *streamer[T]) Append(data ...T) Streamer[T] {
 
 // Execute implements Streamer.Execute; ctx and parallelSize carry over to the snapshot.
 func (s *streamer[T]) Execute() Streamer[T] {
-	data := materialize(s.seq)
+	data := materialize(s.ensureFlushed().seq)
 	// keep ctx and parallelSize so downstream ops behave as before the snapshot
 	return &streamer[T]{ctx: s.ctx, seq: seqFromSlice(data), sizeHint: int64(len(data)), parallelSize: s.parallelSize}
 }
 
-// Parallel implements Streamer.Parallel; n <= 0 is a no-op returning the same stream.
+// Parallel implements Streamer.Parallel: n <= 0 is a no-op returning the
+// same stream; otherwise a mid-chain call closes the current parallel
+// section (if any) and opens a new one with n workers. Consecutive stateless
+// ops inside the section fuse into one pool (proposal docs/proposals/parallel-v2.md).
 func (s streamer[T]) Parallel(n int) Streamer[T] {
 	if n <= 0 {
 		return &s
 	}
+	s.ensureFlushed() // close current section if open (value receiver is addressable)
 	s.parallelSize = n
 	return &s
 }
 
 // ToSlice implements Streamer.ToSlice.
 func (s *streamer[T]) ToSlice() []T {
-	return materialize(s.seq)
+	return materialize(s.effectiveSeq())
 }
 
 // Collect implements Streamer.Collect by draining into the caller's collector.
@@ -450,7 +543,7 @@ func (s *streamer[T]) Collect(to types.Collector[T]) any {
 
 // ForEach implements Streamer.ForEach.
 func (s *streamer[T]) ForEach(consumer types.Consumer[T]) {
-	for v := range s.seq {
+	for v := range s.effectiveSeq() {
 		if s.cancelled() {
 			return
 		}
@@ -460,7 +553,7 @@ func (s *streamer[T]) ForEach(consumer types.Consumer[T]) {
 
 // AllMatch implements Streamer.AllMatch; short-circuits on the first failing element.
 func (s *streamer[T]) AllMatch(judge types.Judge[T]) bool {
-	for v := range s.seq {
+	for v := range s.effectiveSeq() {
 		if s.cancelled() || !judge(v) {
 			return false
 		}
@@ -470,7 +563,7 @@ func (s *streamer[T]) AllMatch(judge types.Judge[T]) bool {
 
 // NonMatch implements Streamer.NonMatch; short-circuits on the first matching element.
 func (s *streamer[T]) NonMatch(judge types.Judge[T]) bool {
-	for v := range s.seq {
+	for v := range s.effectiveSeq() {
 		if s.cancelled() || judge(v) {
 			return false
 		}
@@ -480,7 +573,7 @@ func (s *streamer[T]) NonMatch(judge types.Judge[T]) bool {
 
 // AnyMatch implements Streamer.AnyMatch; short-circuits on the first matching element.
 func (s *streamer[T]) AnyMatch(judge types.Judge[T]) bool {
-	for v := range s.seq {
+	for v := range s.effectiveSeq() {
 		if s.cancelled() {
 			return false
 		}
@@ -494,7 +587,7 @@ func (s *streamer[T]) AnyMatch(judge types.Judge[T]) bool {
 // Reduce implements Streamer.Reduce from T's zero value.
 func (s *streamer[T]) Reduce(accumulator types.BinaryOperator[T]) T {
 	var result T
-	for v := range s.seq {
+	for v := range s.effectiveSeq() {
 		if s.cancelled() {
 			return result
 		}
@@ -506,7 +599,7 @@ func (s *streamer[T]) Reduce(accumulator types.BinaryOperator[T]) T {
 // ReduceFrom implements Streamer.ReduceFrom from an explicit initial value.
 func (s *streamer[T]) ReduceFrom(initValue T, accumulator types.BinaryOperator[T]) T {
 	result := initValue
-	for v := range s.seq {
+	for v := range s.effectiveSeq() {
 		if s.cancelled() {
 			return result
 		}
@@ -518,7 +611,7 @@ func (s *streamer[T]) ReduceFrom(initValue T, accumulator types.BinaryOperator[T
 // ReduceWith implements Streamer.ReduceWith with an any-typed accumulator.
 func (s *streamer[T]) ReduceWith(initValue any, accumulator types.Accumulator[T, any]) any {
 	result := initValue
-	for v := range s.seq {
+	for v := range s.effectiveSeq() {
 		if s.cancelled() {
 			return result
 		}
@@ -530,7 +623,7 @@ func (s *streamer[T]) ReduceWith(initValue any, accumulator types.Accumulator[T,
 // ReduceBy implements Streamer.ReduceBy; the initial value is built from sizeHint (may be negative = unknown).
 func (s *streamer[T]) ReduceBy(initValueBuilder func(sizeMayNegative int) any, accumulator types.Accumulator[T, any]) any {
 	result := initValueBuilder(int(s.sizeHint))
-	for v := range s.seq {
+	for v := range s.effectiveSeq() {
 		if s.cancelled() {
 			return result
 		}
@@ -542,7 +635,7 @@ func (s *streamer[T]) ReduceBy(initValueBuilder func(sizeMayNegative int) any, a
 // First implements Streamer.First; stops the pipeline after one element.
 func (s *streamer[T]) First() T {
 	var zero T
-	for v := range s.seq {
+	for v := range s.effectiveSeq() {
 		return v
 	}
 	return zero
@@ -555,7 +648,7 @@ func (s *streamer[T]) First() T {
 func (s *streamer[T]) Take() T {
 	var pick T
 	seen := int64(0)
-	for v := range s.seq {
+	for v := range s.effectiveSeq() {
 		if s.cancelled() {
 			return pick
 		}
@@ -575,7 +668,7 @@ func (s *streamer[T]) Any() T { return s.Take() }
 // Last implements Streamer.Last by consuming the whole stream.
 func (s *streamer[T]) Last() T {
 	var result T
-	for v := range s.seq {
+	for v := range s.effectiveSeq() {
 		result = v
 	}
 	return result
@@ -587,7 +680,7 @@ func (s *streamer[T]) Count() int64 {
 		return s.sizeHint
 	}
 	var count int64
-	for range s.seq {
+	for range s.effectiveSeq() {
 		count++
 	}
 	return count
@@ -595,5 +688,5 @@ func (s *streamer[T]) Count() int64 {
 
 // Seq implements Streamer.Seq.
 func (s *streamer[T]) Seq() iter.Seq[T] {
-	return s.seq
+	return s.effectiveSeq()
 }
