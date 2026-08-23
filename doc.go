@@ -30,7 +30,7 @@
 // # Operations
 //
 // Intermediate (lazy, return a new stream):
-//   - Stateless: Filter, Map, Convert, Peek, FlatMap
+//   - Stateless: Filter, Map, Convert (deprecated: use generic MapTo), Peek, FlatMap
 //   - Stateful: Distinct (or generic DistinctBy), Sort, ReverseSort, Reverse, Limit, Skip, Pick
 //
 // Terminal (eager, execute the pipeline):
@@ -68,4 +68,8 @@
 //
 // Streams are single-use. Each terminal operation consumes the underlying iterator.
 // Create a new stream for each pipeline.
+//
+// Infinite sources (Repeat, unbounded From) hang non-short-circuiting terminal
+// operations such as ToSlice, Reduce, Count, Last, or Take without a cancellable
+// context — bound them with Limit or WithContext.
 package stream

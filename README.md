@@ -72,9 +72,11 @@ All intermediate operations are lazy — they compose closures without processin
 |--------|-----------|-------------|
 | `Filter` | `(Judge[T]) Streamer[T]` | Keep elements matching the predicate |
 | `Map` | `(Mapper[T]) Streamer[T]` | Transform each element (same type) |
-| `Convert` | `(Converter[T, any]) Streamer[any]` | Transform to a different type |
+| `Convert` | `(Converter[T, any]) Streamer[any]` | Transform to a different type. Deprecated: use `stream.MapTo` |
 | `Peek` | `(Consumer[T]) Streamer[T]` | Apply an action without modifying elements |
 | `FlatMap` | `(func(T) Streamer[any]) Streamer[any]` | Flatten each element to a sub-stream |
+
+Package-level generic (methods cannot add type parameters): `stream.MapTo[T, R](s, func(T) R) Streamer[R]` — the type-safe replacement for `Convert`.
 
 ```go
 stream.SliceOf(1, 2, 3, 4).
@@ -145,7 +147,7 @@ byDept := stream.DistinctBy(users, func(u User) string { return u.Dept })
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `First` | `() T` | First element |
-| `Take` | `() T` | Random element |
+| `Take` | `() T` | Random element (uniform reservoir sampling, O(1) memory) |
 | `Any` | `() T` | Alias for Take |
 | `Last` | `() T` | Last element |
 
@@ -215,6 +217,16 @@ type Unique interface{ Key() string }             // Custom distinct key
 ```
 
 ## Important Notes
+
+- **Infinite streams hang non-short-circuiting terminals.** `ToSlice`, `ForEach`, `Reduce*`, `Count`, `Last`, and `Take`/`Any` (without a cancellable context) never finish on `Repeat` or an infinite `From` source. Bound them with `Limit` or `WithContext`:
+
+```go
+stream.Repeat(1).Limit(100).ToSlice() // bounded: ok
+
+ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+defer cancel()
+stream.Repeat(1).WithContext(ctx).Take() // cancellable: ok
+```
 
 - **Streams are single-use.** A terminal operation consumes the stream. Create a new stream for each pipeline.
 - **Lazy evaluation** — intermediate operations compose closures; work happens only during terminal operations. `Limit(1).First()` on a million elements only processes one element.
