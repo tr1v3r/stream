@@ -86,7 +86,6 @@ golangci-lint run --config=.golangci.yml
 - **Goroutine leak in parallel short-circuit**: `parallelSeq` (`stream.go`) only unblocks workers on `ctx` cancellation; when a downstream `yield` returns false (e.g. `Limit` after `Parallel(n)`), feeder/workers block forever on channel sends under `context.Background`. Fix direction: derive a `context.WithCancel` inside `parallelSeq` and `defer cancel()`.
 - **Global `seededRand` is not concurrency-safe**: concurrent `Take()` calls race.
 - **`ErrUnsupportType` (`errors.go`) is dead code** — unused.
-- **`tests/test_1.go` `Question1Sub2` comparator bug**: `left.ID > right.ID` returns `-1` (should be `1`).
 
 ## Common Development Tasks
 
@@ -95,5 +94,5 @@ When adding new stream operations:
 2. Implement in `streamer[T]` in `stream.go` (compose an `iter.Seq` closure; keep lazy)
 3. Update `sizeHint` propagation deliberately (see table above)
 4. For parallel support, use `parallelSeq` helper or handle `parallelSize > 0` — and check the short-circuit leak gotcha
-5. Add assertion-based tests in `export_test.go` (print-only tests are not enough; existing `TestStream`/`TestStream_1` are print-style legacy)
+5. Add assertion-based tests: `factory_test.go` / `ops_test.go` / `terminal_test.go` / `parallel_test.go` hold the suite; parallel results must be compared as sorted multisets (order is not preserved). Two tests are committed behind `t.Skip` as executable specs for the known issues above — remove the skip when the fix lands and keep them green.
 6. Update `README.md` and `doc.go` documentation

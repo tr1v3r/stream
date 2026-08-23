@@ -1,7 +1,8 @@
 package stream_test
 
 import (
-	"fmt"
+	"math"
+	"slices"
 	"testing"
 
 	"github.com/tr1v3r/stream"
@@ -10,25 +11,29 @@ import (
 func TestStream(t *testing.T) {
 	array := []int{4, 1, 3, 3, 2}
 
-	streamer := stream.SliceOf(array...).Distinct()
+	sorted := stream.SliceOf(array...).Distinct().
+		Sort(func(l, r int) int { return l - r }).ToSlice()
+	if !slices.Equal(sorted, []int{1, 2, 3, 4}) {
+		t.Fatalf("expected [1 2 3 4], got %v", sorted)
+	}
 
-	fmt.Println("distinct: ", streamer.ToSlice())
-	fmt.Println("sort: ", streamer.Sort(func(l, r int) int { return l - r }).ToSlice())
-	fmt.Println("reverse sort: ", streamer.ReverseSort(func(l, r int) int { return l - r }).ToSlice())
+	revSorted := stream.SliceOf(array...).Distinct().
+		ReverseSort(func(l, r int) int { return l - r }).ToSlice()
+	if !slices.Equal(revSorted, []int{4, 3, 2, 1}) {
+		t.Fatalf("expected [4 3 2 1], got %v", revSorted)
+	}
 
 	result := stream.SliceOf(array...).
 		Convert(func(i int) any { return float64(i + 1) }).
-		Reduce(func(result, data any) any {
-			if result == nil {
+		Reduce(func(acc, data any) any {
+			if acc == nil {
 				return data.(float64)
 			}
-			return result.(float64) + data.(float64)
+			return acc.(float64) + data.(float64)
 		}).(float64)
-	fmt.Println("result: ", result)
-
-	stream.SliceOf(array...).
-		Convert(func(i int) any { return float64(i + 1) }).
-		ForEach(func(data any) { fmt.Println(data) })
+	if result != 18 {
+		t.Fatalf("expected 18, got %v", result)
+	}
 
 	floatResult := stream.SliceOf(array...).
 		Convert(func(i int) any { return float64(i + 1) }).Collect(func(data ...any) any {
@@ -40,26 +45,53 @@ func TestStream(t *testing.T) {
 	}).(stream.Streamer[float64]).ReduceFrom(99.99, func(result, data float64) float64 {
 		return result + data
 	})
-	fmt.Println("collect new streamer result: ", floatResult)
+	if math.Abs(floatResult-117.99) > 1e-9 {
+		t.Fatalf("expected 117.99, got %v", floatResult)
+	}
 }
 
 func TestStream_1(t *testing.T) {
 	array := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
-	fmt.Println("stream First: ", stream.SliceOf(array...).First())
-	fmt.Println("stream Take: ", stream.SliceOf(array...).Take())
-	fmt.Println("stream Last: ", stream.SliceOf(array...).Last())
-	fmt.Println("stream ToSlice: ", stream.SliceOf(array...).ToSlice())
-	fmt.Println("stream Reverse: ", stream.SliceOf(array...).Reverse().ToSlice())
-	fmt.Println("stream Limit: ", stream.SliceOf(array...).Limit(8).ToSlice())
-	fmt.Println("stream Skip: ", stream.SliceOf(array...).Skip(1).ToSlice())
-	fmt.Println("stream Pick: ", stream.SliceOf(array...).Pick(0, 8, 2).ToSlice())
-	fmt.Println("stream Pick: ", stream.SliceOf(array...).Pick(1, 9, 2).ToSlice())
-	fmt.Println("stream Pick: ", stream.SliceOf(array...).Pick(1, 99, 2).ToSlice())
-	fmt.Println("stream Pick: ", stream.SliceOf(array...).Pick(1, -1, 2).ToSlice())
-	result := stream.SliceOf(array...).Reduce(func(result, data int) int {
-		return result + data
-	})
-	fmt.Println("stream Reduce sum: ", result)
+
+	if got := stream.SliceOf(array...).First(); got != 1 {
+		t.Fatalf("expected First 1, got %d", got)
+	}
+	if got := stream.SliceOf(array...).Last(); got != 10 {
+		t.Fatalf("expected Last 10, got %d", got)
+	}
+	if got := stream.SliceOf(array...).Take(); !slices.Contains(array, got) {
+		t.Fatalf("Take must return a member, got %d", got)
+	}
+	if got := stream.SliceOf(array...).Any(); !slices.Contains(array, got) {
+		t.Fatalf("Any must return a member, got %d", got)
+	}
+	if got := stream.SliceOf(array...).ToSlice(); !slices.Equal(got, array) {
+		t.Fatalf("expected %v, got %v", array, got)
+	}
+	if got := stream.SliceOf(array...).Reverse().ToSlice(); !slices.Equal(got, []int{10, 9, 8, 7, 6, 5, 4, 3, 2, 1}) {
+		t.Fatalf("unexpected reverse: %v", got)
+	}
+	if got := stream.SliceOf(array...).Limit(8).ToSlice(); !slices.Equal(got, array[:8]) {
+		t.Fatalf("unexpected limit: %v", got)
+	}
+	if got := stream.SliceOf(array...).Skip(1).ToSlice(); !slices.Equal(got, array[1:]) {
+		t.Fatalf("unexpected skip: %v", got)
+	}
+	if got := stream.SliceOf(array...).Pick(0, 8, 2).ToSlice(); !slices.Equal(got, []int{1, 3, 5, 7, 9}) {
+		t.Fatalf("unexpected pick: %v", got)
+	}
+	if got := stream.SliceOf(array...).Pick(1, 9, 2).ToSlice(); !slices.Equal(got, []int{2, 4, 6, 8, 10}) {
+		t.Fatalf("unexpected pick: %v", got)
+	}
+	if got := stream.SliceOf(array...).Pick(1, 99, 2).ToSlice(); !slices.Equal(got, []int{2, 4, 6, 8, 10}) {
+		t.Fatalf("end beyond size must clamp: %v", got)
+	}
+	if got := stream.SliceOf(array...).Pick(1, -1, 2).ToSlice(); !slices.Equal(got, []int{2, 4, 6, 8, 10}) {
+		t.Fatalf("negative end must mean last index: %v", got)
+	}
+	if got := stream.SliceOf(array...).Reduce(func(a, b int) int { return a + b }); got != 55 {
+		t.Fatalf("expected sum 55, got %d", got)
+	}
 }
 
 func TestStream_LazyEval(t *testing.T) {
