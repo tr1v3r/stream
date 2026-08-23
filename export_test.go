@@ -37,7 +37,7 @@ func TestStream(t *testing.T) {
 
 	floatResult := stream.SliceOf(array...).
 		Convert(func(i int) any { return float64(i + 1) }).Collect(func(data ...any) any {
-		var floats []float64
+		floats := make([]float64, 0, len(data))
 		for _, item := range data {
 			floats = append(floats, item.(float64))
 		}
@@ -198,4 +198,3 @@ func TestStream_ParallelDistinct(t *testing.T) {
 		t.Fatalf("expected 1000 unique elements, got %d", len(got))
 	}
 }
-

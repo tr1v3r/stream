@@ -9,7 +9,7 @@ import (
 // To converts a slice of T to a slice of R
 func To[T, R any](converter types.Converter[T, R]) types.Collector[T] {
 	return func(data ...T) any {
-		var results []R
+		results := make([]R, 0, len(data))
 		for _, item := range data {
 			results = append(results, converter(item))
 		}

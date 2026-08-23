@@ -52,7 +52,7 @@ golangci-lint run --config=.golangci.yml
 
 ### Package Structure (flat layout — NOT nested under stream/)
 
-- Root package `stream`: `export.go`, `stream.go`, `factory.go`, `helper.go`, `errors.go`, `doc.go`, `export_test.go`
+- Root package `stream`: `export.go`, `stream.go`, `factory.go`, `helper.go`, `doc.go`, `export_test.go`
 - `types/`: Functional interface type definitions
 - `tests/`: Exercise-style test cases and examples (excluded from lint)
 
@@ -81,10 +81,9 @@ golangci-lint run --config=.golangci.yml
 - `Sort`, `ReverseSort`, `Reverse`, `Append`: hint preserved / additive
 - `Count()` short-circuits to `sizeHint` when known — keep the hint honest when adding ops
 
-## Known Issues (verified by repro, fix before relying on them)
+## Known Issues
 
-- **`ErrUnsupportType` (`errors.go`) is dead code** — unused.
-- **`Execute()` drops `parallelSize`** — the eager snapshot silently re-enters serial mode (newStreamer does not carry the field).
+- None currently. Historical issues (parallel goroutine leak, seededRand race, empty-stream Take panic, negative Pick index, parallel Distinct crash, Execute dropping parallelSize) are fixed and guarded by regression tests in `parallel_test.go` / `export_test.go`.
 
 ## Common Development Tasks
 
