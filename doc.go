@@ -51,13 +51,17 @@
 //
 // # Parallel Processing
 //
-// Use Parallel(n) to enable concurrent processing. n controls concurrency:
+// Parallel(n) opens a section of stateless operations that run fused on one
+// worker pool; consecutive Filter/Map/Peek inside the section compose into a
+// single stage. Sections close at stateful operations, type changes, every
+// terminal, and the next Parallel call (which opens a new section — size
+// concurrency per cost profile while sections overlap). Output is unordered
+// unless Ordered() follows:
 //
-//   - 0: no change (synchronous)
+//	stream.SliceOf(data...).Parallel(4).Ordered().
+//	    Filter(f).Map(g).ToSlice() // equals serial execution element-for-element
 //
-//   - 1+: concurrent workers
-//
-//     stream.SliceOf(data...).Parallel(4).Filter(...).ForEach(...)
+// See docs/proposals/parallel-v2.md for semantics and measured overheads.
 //
 // # Helper Functions
 //

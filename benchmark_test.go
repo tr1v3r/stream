@@ -75,3 +75,39 @@ func BenchmarkPipeline(b *testing.B) {
 			Reduce(func(a, b int) int { return a + b })
 	}
 }
+
+// Parallel v2 section benchmarks (proposal gates A1/A2). The near-free
+// workload pins machinery overhead; compare Parallel(4) against serial.
+func BenchmarkParallelSection(b *testing.B) {
+	src := makeUnsorted(100000)
+	f := func(n int) bool { return n%2 == 0 }
+	m := func(n int) int { return n + 1 }
+
+	cases := []struct {
+		name    string
+		workers int
+		ordered bool
+	}{
+		{"serial", 0, false},
+		{"fused-4", 4, false},
+		{"fused-4-ordered", 4, true},
+	}
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			for b.Loop() {
+				s := stream.SliceOf(src...)
+				if tc.workers > 0 {
+					s = s.Parallel(tc.workers)
+				}
+				if tc.ordered {
+					s = s.Ordered()
+				}
+				sink := 0
+				for _, v := range s.Filter(f).Map(m).ToSlice() {
+					sink += v
+				}
+				_ = sink
+			}
+		})
+	}
+}

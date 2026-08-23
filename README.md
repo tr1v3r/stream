@@ -201,17 +201,43 @@ stream.From2(maps.All(m)).ToSlice() // [1, 2] (order varies)
 
 ## Parallel Processing
 
+Parallelism is **section-scoped**: `Parallel(n)` opens a section of stateless operations that run fused on ONE worker pool — not one pool per operation. Consecutive `Filter`/`Map`/`Peek` inside the section compose into a single function; elements flow in 64-element batches.
+
 ```go
+// one pool executes the whole Filter+Map section (4 workers)
 stream.SliceOf(largeData...).
-    Parallel(4).                        // 4 concurrent workers
+    Parallel(4).                        // open section, 4 workers
     Filter(heavyPredicate).
     Map(heavyTransform).
     ForEach(process)
 ```
 
+**Sections close** at stateful ops (`Sort`, `Distinct`, `Limit`, ...), type changes (`MapTo`, `Convert`, `FlatMap`), and every terminal. A mid-chain `Parallel(n)` closes the current section and opens a new one — this is how you size concurrency per cost profile while sections overlap (pipeline parallelism):
+
+```go
+// heterogeneous: 16 workers absorb IO latency, 2 suffice for CPU parsing,
+// and section A keeps producing while section B consumes
+stream.SliceOf(urls...).
+    Parallel(16).                       // section A: IO-bound
+    Filter(func(u string) bool { return checkRemote(u) }).
+    Parallel(2).                        // closes A, opens section B
+    Map(func(u string) string { return parse(u) })
+```
+
+**Order**: sections are unordered by default (fastest). Add `Ordered()` to reproduce serial encounter order exactly:
+
+```go
+stream.SliceOf(data...).Parallel(4).Ordered().
+    Filter(f).Map(g).ToSlice()          // element-for-element equal to serial
+```
+
 `Parallel(n)` behavior:
 - `n <= 0`: synchronous (no change)
-- `n >= 1`: concurrent workers with goroutine pools
+- `n >= 1`: n workers on the section's fused stages, unordered
+- `Ordered()`: same, but output order matches serial execution
+- Sections ignore `Parallel` for stateful stages (they materialize serially after the section closes)
+
+Overhead (measured on near-free workloads, Apple M3 Pro): unordered sections run at ~1–2× serial time, ordered ~2×; heavy per-element work scales at ~3.6× with 4 workers. See `docs/proposals/parallel-v2.md`.
 
 Use `WithContext(ctx)` to support cancellation:
 
@@ -262,7 +288,7 @@ stream.Repeat(1).WithContext(ctx).Take() // cancellable: ok
 - **Streams are single-use.** A terminal operation consumes the stream. Create a new stream for each pipeline.
 - **Lazy evaluation** — intermediate operations compose closures; work happens only during terminal operations. `Limit(1).First()` on a million elements only processes one element.
 - **Distinct uses `fmt.Sprint`** by default for hashing. Implement the `types.Unique` interface (`Key() string`) for custom hash keys, or use the generic `stream.DistinctBy` with comparable keys for exact equality without string coercion.
-- **Parallel mode does not preserve order.** Elements may be processed out of order when using `Parallel(n)` with `n > 1`. Use `Sort` after parallel operations if order matters.
+- **Parallel sections are unordered by default.** Use `Parallel(n).Ordered()` when output must match serial order, or `Sort` after the section.
 
 ## License
 
