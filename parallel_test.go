@@ -68,6 +68,34 @@ func TestCtx_CancelledParallel(t *testing.T) {
 	}
 }
 
+func TestParallel_ExecutePreservesParallel(t *testing.T) {
+	var mu sync.Mutex
+	inside, peak := 0, 0
+	data := make([]int, 200)
+	got := stream.SliceOf(data...).Parallel(4).Execute().
+		Filter(func(n int) bool {
+			mu.Lock()
+			inside++
+			if inside > peak {
+				peak = inside
+			}
+			mu.Unlock()
+			time.Sleep(2 * time.Millisecond)
+			mu.Lock()
+			inside--
+			mu.Unlock()
+			return true
+		}).ToSlice()
+	if len(got) != 200 {
+		t.Fatalf("expected all 200 elements, got %d", len(got))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if peak < 2 {
+		t.Fatalf("Execute dropped parallelSize: peak filter concurrency %d, expected >= 2", peak)
+	}
+}
+
 func TestParallel_ShortCircuitNoLeak(t *testing.T) {
 	runtime.GC()
 	time.Sleep(50 * time.Millisecond)

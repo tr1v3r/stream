@@ -321,15 +321,16 @@ func (s *streamer[T]) Skip(n int64) Streamer[T] {
 func (s *streamer[T]) Pick(start, end, interval int) Streamer[T] {
 	prev := s.seq
 	return s.wrap(func(yield func(T) bool) {
-		// Resolve negative end: use sizeHint if known, otherwise materialize
+		if start < 0 || interval <= 0 {
+			return
+		}
+		// Resolve negative end (last index): use sizeHint if known,
+		// otherwise materialize to find out
 		if end < 0 {
 			if s.sizeHint >= 0 {
 				end = int(s.sizeHint) - 1
 			} else {
 				data := materialize(prev)
-				if start < 0 || interval <= 0 {
-					return
-				}
 				for i := start; i < len(data); i += interval {
 					if !yield(data[i]) {
 						return
@@ -337,9 +338,6 @@ func (s *streamer[T]) Pick(start, end, interval int) Streamer[T] {
 				}
 				return
 			}
-		}
-		if start < 0 || interval <= 0 {
-			return
 		}
 		idx := 0
 		for v := range prev {
@@ -378,7 +376,8 @@ func (s *streamer[T]) Append(data ...T) Streamer[T] {
 
 func (s *streamer[T]) Execute() Streamer[T] {
 	data := materialize(s.seq)
-	return newStreamer(seqFromSlice(data), int64(len(data))).WithContext(s.ctx)
+	// keep ctx and parallelSize so downstream ops behave as before the snapshot
+	return &streamer[T]{ctx: s.ctx, seq: seqFromSlice(data), sizeHint: int64(len(data)), parallelSize: s.parallelSize}
 }
 
 func (s streamer[T]) Parallel(n int) Streamer[T] {
