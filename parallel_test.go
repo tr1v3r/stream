@@ -15,7 +15,7 @@ import (
 // Parallel mode does not preserve order; compare as sorted multisets.
 func TestParallel_Filter(t *testing.T) {
 	data := make([]int, 0, 1000)
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		data = append(data, i)
 	}
 	got := stream.SliceOf(data...).Parallel(4).
@@ -28,7 +28,7 @@ func TestParallel_Filter(t *testing.T) {
 
 func TestParallel_MapPeek(t *testing.T) {
 	data := make([]int, 0, 300)
-	for i := 0; i < 300; i++ {
+	for i := range 300 {
 		data = append(data, i)
 	}
 	var calls atomic.Int64
@@ -47,7 +47,7 @@ func TestParallel_MapPeek(t *testing.T) {
 
 func TestParallel_Count(t *testing.T) {
 	data := make([]int, 0, 1000)
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		data = append(data, i)
 	}
 	if n := stream.SliceOf(data...).Parallel(4).
@@ -127,11 +127,9 @@ func TestParallel_ConcurrentTakeNoRace(t *testing.T) {
 	src := make([]int, 100)
 	var wg sync.WaitGroup
 	for range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			stream.SliceOf(src...).Take()
-		}()
+		})
 	}
 	wg.Wait()
 }

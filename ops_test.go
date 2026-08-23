@@ -70,6 +70,48 @@ func TestOps_Distinct(t *testing.T) {
 	}
 }
 
+func TestOps_DistinctBy(t *testing.T) {
+	// comparable keys: exact Go equality, no string coercion
+	got := stream.DistinctBy(stream.SliceOf(1, 1, 2, 3, 3, 1), func(n int) int { return n }).ToSlice()
+	if !slices.Equal(got, []int{1, 2, 3}) {
+		t.Fatalf("expected [1 2 3], got %v", got)
+	}
+
+	// key by struct field: same key -> first occurrence wins
+	type user struct{ dept, name string }
+	got2 := stream.DistinctBy(
+		stream.SliceOf(user{"a", "x"}, user{"b", "y"}, user{"a", "z"}),
+		func(u user) string { return u.dept },
+	).ToSlice()
+	if len(got2) != 2 || got2[0].name != "x" || got2[1].name != "y" {
+		t.Fatalf("expected first-per-dept [a/x b/y], got %v", got2)
+	}
+
+	// unlike Distinct, the key function decides: int 1 and string "1" coexist
+	type typedKey struct {
+		isInt bool
+		intV  int
+		strV  string
+	}
+	got3 := stream.DistinctBy(stream.SliceOf[any](1, "1"), func(v any) typedKey {
+		switch x := v.(type) {
+		case int:
+			return typedKey{isInt: true, intV: x}
+		case string:
+			return typedKey{strV: x}
+		}
+		return typedKey{}
+	}).ToSlice()
+	if len(got3) != 2 {
+		t.Fatalf("expected both kept with exact keys, got %v", got3)
+	}
+
+	// sizeHint semantics match Distinct: unknown after dedup
+	if n := stream.DistinctBy(stream.SliceOf(1, 1, 2), func(n int) int { return n }).Count(); n != 2 {
+		t.Fatalf("expected Count 2 by iteration, got %d", n)
+	}
+}
+
 func TestOps_DistinctAnyCollision(t *testing.T) {
 	// Documented quirk: distinct keys come from fmt.Sprint, so int 1 and
 	// string "1" collide and the later one is dropped.

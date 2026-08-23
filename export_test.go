@@ -190,7 +190,7 @@ func TestStream_PickNegativeStart(t *testing.T) {
 
 func TestStream_ParallelDistinct(t *testing.T) {
 	data := make([]int, 0, 20000)
-	for i := 0; i < 20000; i++ {
+	for i := range 20000 {
 		data = append(data, i%1000)
 	}
 	got := stream.SliceOf(data...).Parallel(4).Distinct().ToSlice()

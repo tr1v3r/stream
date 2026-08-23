@@ -6,7 +6,7 @@ This file provides guidance for AI coding agents (Claude Code, Codex, etc.) work
 
 ## Project Overview
 
-Go stream processing library (`github.com/tr1v3r/stream`) providing Java Streams-like functionality. Core pipeline representation is `iter.Seq[T]` (Go 1.23+), enabling true lazy evaluation with short-circuit support. Zero external dependencies; `go.sum` is empty. `go.mod` declares `go 1.24.0`.
+Go stream processing library (`github.com/tr1v3r/stream`) providing Java Streams-like functionality. Core pipeline representation is `iter.Seq[T]`, enabling true lazy evaluation with short-circuit support. Zero external dependencies; `go.sum` is empty. `go.mod` declares `go 1.26.0`.
 
 ## Development Commands
 
@@ -41,14 +41,14 @@ golangci-lint run --config=.golangci.yml
    - `parallelSize int` for concurrent processing mode (0=sync)
    - All intermediate ops compose `iter.Seq[T]` closures (true lazy)
    - `parallelSeq` helper: feeder goroutine → N workers → out channel
-   - `Sortable[T]` for sort.Interface support
+   - Sorting via `slices.SortFunc` (type-safe pdqsort, no sort.Interface adapter)
 
 3. **Factory Functions** (`factory.go`): `SliceOf`, `Repeat`, `RepeatN`, `Concat`, `From` (from `iter.Seq[T]`), `From2` (from `iter.Seq2[K,V]`, values only)
 
 4. **Helper Functions** (`helper.go`)
    - `To[T, R]`: Convert slice type with converter function
    - `AnyTo[T]`: Convert `[]any` to typed slice
-   - `distinctJudge`: Internal distinct filter using `fmt.Sprint` or `types.Unique`
+   - `DistinctBy[T, K comparable]` (in `stream.go`): dedup by exact comparable keys; `Distinct` delegates to it with `fmt.Sprint`/`types.Unique` keys
 
 ### Package Structure (flat layout — NOT nested under stream/)
 
@@ -66,7 +66,7 @@ golangci-lint run --config=.golangci.yml
 
 - **Streams are single-use**: A terminal operation consumes the underlying `iter.Seq`. Create a new stream for each pipeline.
 - **Lazy evaluation**: Intermediate operations compose closures without executing. `Limit(1)` + `First()` on a million elements processes only 1 element.
-- **Distinct uses `fmt.Sprint`** for hashing by default (`1` and `"1"` collide). Implement `types.Unique` for custom hash keys.
+- **Distinct uses `fmt.Sprint`** for hashing by default (`1` and `"1"` collide). Implement `types.Unique` for custom hash keys, or prefer the generic `DistinctBy[T, K comparable]` for exact keys (also much faster: no boxing).
 - **`Convert` and `FlatMap` produce `Streamer[any]`**: Type info is lost; use `AnyTo[T]()` or `To[T, R]()` to convert back.
 - **Parallel mode does not preserve order**. Also note: only `Filter`/`Map`/`Peek` have parallel branches — `Convert`, `FlatMap`, `Sort`, `Reverse`, and `Distinct` (serial by design, see stream.go) silently ignore `Parallel(n)`.
 - **Each parallel-aware op spawns its own worker pool**: `Parallel(4).Filter(...).Map(...)` = two chained pools; keep pipelines short or expect overhead.
@@ -74,7 +74,7 @@ golangci-lint run --config=.golangci.yml
 
 ### sizeHint Propagation
 
-- `Filter`, `Distinct`, `FlatMap`, `Pick`: hint becomes -1
+- `Filter`, `Distinct`, `DistinctBy`, `FlatMap`, `Pick`: hint becomes -1
 - `Map`, `Peek`, `Convert`: hint preserved
 - `Limit(n)`: min(hint, n) if hint >= 0
 - `Skip(n)`: max(0, hint - n) if hint >= 0

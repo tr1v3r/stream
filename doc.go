@@ -1,7 +1,7 @@
 // Package stream provides Java Streams-like functional operations on Go collections.
 //
 // It enables true lazy evaluation, parallel processing, and functional-style pipelines
-// using Go generics and the iter package (requires Go 1.24+, per go.mod).
+// using Go generics and the iter package (requires Go 1.26+, per go.mod).
 //
 // Intermediate operations compose iter.Seq[T] closures without executing any work.
 // Processing is deferred until a terminal operation ranges over the pipeline.
@@ -31,7 +31,7 @@
 //
 // Intermediate (lazy, return a new stream):
 //   - Stateless: Filter, Map, Convert, Peek, FlatMap
-//   - Stateful: Distinct, Sort, ReverseSort, Reverse, Limit, Skip, Pick
+//   - Stateful: Distinct (or generic DistinctBy), Sort, ReverseSort, Reverse, Limit, Skip, Pick
 //
 // Terminal (eager, execute the pipeline):
 //   - Collect: ToSlice, Collect
