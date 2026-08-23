@@ -101,13 +101,16 @@ func TestParallel_ShortCircuitNoLeak(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	before := runtime.NumGoroutine()
 
-	data := make([]int, 5000)
-	if got := stream.SliceOf(data...).Parallel(4).
-		Map(func(n int) int { return n + 1 }).
+	// slow work + infinite source: the in-buffer (1024) fills and the feeder
+	// provably parks in its send select long before the consumer receives
+	// enough elements to short-circuit, so cancellation deterministically
+	// exercises the feeder's Done branch (and would leak it without the fix)
+	if got := stream.Repeat(1).Parallel(4).
+		Map(func(n int) int { time.Sleep(10 * time.Millisecond); return n + 1 }).
 		Limit(2).ToSlice(); len(got) != 2 {
 		t.Fatalf("expected 2 elements, got %d", len(got))
 	}
-	if got := stream.SliceOf(data...).Parallel(4).
+	if got := stream.Repeat(0).Parallel(4).
 		Filter(func(int) bool { return true }).
 		First(); got != 0 {
 		t.Fatalf("expected first element 0, got %d", got)

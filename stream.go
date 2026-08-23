@@ -61,16 +61,10 @@ func (s *streamer[T]) parallelSeq(work func(T, chan<- T)) iter.Seq[T] {
 		go func() {
 			defer close(in)
 			for v := range prev {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-				select {
-				case in <- v:
-				case <-ctx.Done():
+				if ctx.Err() != nil {
 					return
 				}
+				in <- v // workers always drain in, even after cancellation
 			}
 		}()
 
@@ -79,7 +73,7 @@ func (s *streamer[T]) parallelSeq(work func(T, chan<- T)) iter.Seq[T] {
 			wg.Go(func() {
 				for v := range in {
 					if ctx.Err() != nil {
-						return
+						continue // cancelled: discard, keep draining so the feeder never blocks
 					}
 					work(v, out)
 				}
