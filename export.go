@@ -83,12 +83,19 @@ type Streamer[T any] interface {
 	// re-iterable snapshot stream; ctx and parallelSize carry over.
 	Execute() Streamer[T]
 
-	// Parallel sets worker-pool concurrency for subsequent Filter/Map/Peek
+	// Parallel sets worker-pool concurrency for a section of stateless
 	// operations: n <= 0 keeps synchronous execution, n >= 1 runs n
-	// workers. Order is not preserved for n > 1, and Distinct/Sort/
-	// Reverse/Convert/FlatMap ignore it. Each parallel-aware operation
-	// spawns its own pool.
+	// workers on the section's fused stages (Filter/Map/Peek chain into
+	// one pool). A mid-chain call closes the current section and opens a
+	// new one; stateful ops and type changes close sections too. Order is
+	// not preserved unless Ordered() follows. See
+	// docs/proposals/parallel-v2.md.
 	Parallel(int) Streamer[T]
+	// Ordered marks the current (or next) parallel section as
+	// order-preserving: elements are index-tagged and re-sequenced at the
+	// consumer, so output matches serial execution order. No-op in serial
+	// mode. Costs one index stamp and slot lookup per element.
+	Ordered() Streamer[T]
 
 	// terminal operate
 

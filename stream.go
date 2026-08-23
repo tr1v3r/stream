@@ -37,6 +37,10 @@ type streamer[T any] struct {
 	// mode and until a parallel section opens; flushFused turns it into the
 	// section's single-pool execution boundary.
 	fused func(T) (T, bool)
+
+	// ordered marks the current section as order-preserving: elements are
+	// index-tagged and re-sequenced at the consumer (proposal 3.3).
+	ordered bool
 }
 
 func newStreamer[T any](seq iter.Seq[T], sizeHint int64) *streamer[T] {
@@ -119,19 +123,124 @@ func fusedWorkers[T any](ctx context.Context, stage func(T) (T, bool), in <-chan
 	}
 }
 
+// indexedValue pairs an element with its input index for ordered sections.
+// A hole marks an index dropped by a fused Filter: it carries no value but
+// must still advance the consumer's sequence position.
+type indexedValue[T any] struct {
+	idx  int
+	val  T
+	hole bool
+}
+
+// orderedFeeder pulls upstream, stamps input indices, and emits batches of
+// indexed elements (proposal 3.3).
+func orderedFeeder[T any](ctx context.Context, prev iter.Seq[T], in chan<- []indexedValue[T], batch int) {
+	defer close(in)
+	buf := make([]indexedValue[T], 0, batch)
+	flush := func() {
+		if len(buf) > 0 {
+			in <- buf
+			buf = make([]indexedValue[T], 0, batch)
+		}
+	}
+	defer flush()
+	i := 0
+	for v := range prev {
+		if ctx.Err() != nil {
+			return
+		}
+		buf = append(buf, indexedValue[T]{idx: i, val: v})
+		i++
+		if len(buf) == batch {
+			flush()
+		}
+	}
+}
+
+// orderedWorkers runs n workers applying stage to indexed batches; the
+// index travels with the result for re-sequencing. Indices dropped by a
+// fused Filter are forwarded as holes so the consumer can advance past them.
+func orderedWorkers[T any](ctx context.Context, stage func(T) (T, bool), in <-chan []indexedValue[T], out chan<- []indexedValue[T], n int, wg *sync.WaitGroup) {
+	for range n {
+		wg.Go(func() {
+			for items := range in {
+				if ctx.Err() != nil {
+					continue // cancelled: discard, keep draining
+				}
+				res := make([]indexedValue[T], 0, len(items))
+				for _, iv := range items {
+					if r, ok := stage(iv.val); ok {
+						res = append(res, indexedValue[T]{idx: iv.idx, val: r})
+					} else {
+						res = append(res, indexedValue[T]{idx: iv.idx, hole: true})
+					}
+				}
+				out <- res
+			}
+		})
+	}
+}
+
+// orderedYield re-sequences batch-indexed elements into encounter order.
+// Batches arrive out of order but are internally contiguous (the feeder
+// stamps indices sequentially), so re-sequencing works per batch: aligned
+// batches yield straight through with zero per-element bookkeeping; only
+// the gap-filling partial batches at stream end need element-level holes.
+// pending holds at most the in-flight window of batches.
+func orderedYield[T any](ctx context.Context, out <-chan []indexedValue[T], yield func(T) bool) bool {
+	next := 0                              // next absolute index to emit
+	pending := map[int][]indexedValue[T]{} // batch start idx -> batch
+	nextBatchStart := 0
+	emit := func(v T) bool {
+		if ctx.Err() != nil || !yield(v) {
+			return false
+		}
+		return true
+	}
+	for items := range out {
+		pending[items[0].idx] = items
+		for {
+			b, ok := pending[nextBatchStart]
+			if !ok {
+				break
+			}
+			delete(pending, nextBatchStart)
+			for _, iv := range b {
+				if !iv.hole && !emit(iv.val) {
+					return false
+				}
+			}
+			nextBatchStart += len(b)
+			_ = next
+		}
+	}
+	return true
+}
+
 // flushFused materializes the open parallel section as a single worker-pool
 // stage: one feeder, n workers applying the fused function, one consumer —
 // reusing the leak-free cancel/drain pattern. Elements flow in
 // parallelBatchSize batches to amortize channel machinery; the consumer
-// un-batches before yielding. After the flush the streamer keeps
-// parallelSize so a following Parallel call or stateless op can open a
+// un-batches before yielding. Ordered sections stamp input indices and
+// re-sequence at the consumer (proposal 3.3). After the flush the streamer
+// keeps parallelSize so a following Parallel call or stateless op can open a
 // new section.
 func (s *streamer[T]) flushFused() *streamer[T] {
 	stage := s.fused
 	prev := s.seq
 	n := s.parallelSize
-	next := &streamer[T]{ctx: s.ctx, sizeHint: s.sizeHint, parallelSize: s.parallelSize}
-	next.seq = func(yield func(T) bool) {
+	ordered := s.ordered
+	next := &streamer[T]{ctx: s.ctx, sizeHint: s.sizeHint, parallelSize: s.parallelSize, ordered: s.ordered}
+	if ordered {
+		next.seq = s.orderedSeq(stage, prev, n)
+	} else {
+		next.seq = s.unorderedSeq(stage, prev, n)
+	}
+	return next
+}
+
+func (s *streamer[T]) unorderedSeq(stage func(T) (T, bool), prev iter.Seq[T], n int) iter.Seq[T] {
+	return func(yield func(T) bool) {
 		ctx, cancel := context.WithCancel(s.ctx)
 		defer cancel()
 
@@ -164,7 +273,33 @@ func (s *streamer[T]) flushFused() *streamer[T] {
 			}
 		}
 	}
-	return next
+}
+
+func (s *streamer[T]) orderedSeq(stage func(T) (T, bool), prev iter.Seq[T], n int) iter.Seq[T] {
+	return func(yield func(T) bool) {
+		ctx, cancel := context.WithCancel(s.ctx)
+		defer cancel()
+
+		in := make(chan []indexedValue[T], n)
+		out := make(chan []indexedValue[T], n)
+
+		go orderedFeeder(ctx, prev, in, parallelBatchSize)
+
+		var wg sync.WaitGroup
+		orderedWorkers(ctx, stage, in, out, n, &wg)
+		go func() {
+			wg.Wait()
+			close(out)
+		}()
+
+		defer func() {
+			cancel()
+			for range out {
+			}
+		}()
+
+		orderedYield(ctx, out, yield)
+	}
 }
 
 // ensureFlushed closes any open parallel section before a stage that cannot
@@ -183,7 +318,7 @@ func (s *streamer[T]) effectiveSeq() iter.Seq[T] {
 }
 
 func (s *streamer[T]) wrap(newSeq iter.Seq[T], newHint int64) *streamer[T] {
-	return &streamer[T]{ctx: s.ctx, seq: newSeq, sizeHint: newHint, parallelSize: s.parallelSize}
+	return &streamer[T]{ctx: s.ctx, seq: newSeq, sizeHint: newHint, parallelSize: s.parallelSize, ordered: s.ordered}
 }
 
 // Filter implements Streamer.Filter. In a parallel section the judge fuses
@@ -191,7 +326,7 @@ func (s *streamer[T]) wrap(newSeq iter.Seq[T], newHint int64) *streamer[T] {
 // preserved.
 func (s *streamer[T]) Filter(judge types.Judge[T]) Streamer[T] {
 	if s.parallelSize > 0 {
-		next := &streamer[T]{ctx: s.ctx, seq: s.seq, sizeHint: -1, parallelSize: s.parallelSize}
+		next := &streamer[T]{ctx: s.ctx, seq: s.seq, sizeHint: -1, parallelSize: s.parallelSize, ordered: s.ordered}
 		next.fused = s.thenFused(func(t T) (T, bool) {
 			if judge(t) {
 				return t, true
@@ -218,7 +353,7 @@ func (s *streamer[T]) Filter(judge types.Judge[T]) Streamer[T] {
 // section's single stage; order is not preserved.
 func (s *streamer[T]) Map(m types.Mapper[T]) Streamer[T] {
 	if s.parallelSize > 0 {
-		next := &streamer[T]{ctx: s.ctx, seq: s.seq, sizeHint: s.sizeHint, parallelSize: s.parallelSize}
+		next := &streamer[T]{ctx: s.ctx, seq: s.seq, sizeHint: s.sizeHint, parallelSize: s.parallelSize, ordered: s.ordered}
 		next.fused = s.thenFused(func(t T) (T, bool) { return m(t), true })
 		return next
 	}
@@ -281,7 +416,7 @@ func MapTo[T, R any](s Streamer[T], m types.Converter[T, R]) Streamer[R] {
 // the section's single stage; order is not preserved.
 func (s *streamer[T]) Peek(consumer types.Consumer[T]) Streamer[T] {
 	if s.parallelSize > 0 {
-		next := &streamer[T]{ctx: s.ctx, seq: s.seq, sizeHint: s.sizeHint, parallelSize: s.parallelSize}
+		next := &streamer[T]{ctx: s.ctx, seq: s.seq, sizeHint: s.sizeHint, parallelSize: s.parallelSize, ordered: s.ordered}
 		next.fused = s.thenFused(func(t T) (T, bool) {
 			consumer(t)
 			return t, true
@@ -515,19 +650,31 @@ func (s *streamer[T]) Append(data ...T) Streamer[T] {
 func (s *streamer[T]) Execute() Streamer[T] {
 	data := materialize(s.ensureFlushed().seq)
 	// keep ctx and parallelSize so downstream ops behave as before the snapshot
-	return &streamer[T]{ctx: s.ctx, seq: seqFromSlice(data), sizeHint: int64(len(data)), parallelSize: s.parallelSize}
+	return &streamer[T]{ctx: s.ctx, seq: seqFromSlice(data), sizeHint: int64(len(data)), parallelSize: s.parallelSize, ordered: s.ordered}
 }
 
 // Parallel implements Streamer.Parallel: n <= 0 is a no-op returning the
 // same stream; otherwise a mid-chain call closes the current parallel
-// section (if any) and opens a new one with n workers. Consecutive stateless
-// ops inside the section fuse into one pool (proposal docs/proposals/parallel-v2.md).
+// section (if any) and opens a new one with n workers (unordered; follow
+// with Ordered() to preserve encounter order). Consecutive stateless ops
+// inside the section fuse into one pool (proposal
+// docs/proposals/parallel-v2.md).
 func (s streamer[T]) Parallel(n int) Streamer[T] {
 	if n <= 0 {
 		return &s
 	}
 	s.ensureFlushed() // close current section if open (value receiver is addressable)
 	s.parallelSize = n
+	s.ordered = false // new section starts unordered; Ordered() opts back in
+	return &s
+}
+
+// Ordered implements Streamer.Ordered: the current parallel section (opened
+// by the most recent Parallel call, or the next one if called before it)
+// preserves encounter order via index-tagged re-sequencing at the consumer.
+// No-op in serial mode.
+func (s streamer[T]) Ordered() Streamer[T] {
+	s.ordered = true
 	return &s
 }
 

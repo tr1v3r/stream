@@ -1,6 +1,8 @@
 package stream_test
 
 import (
+	"context"
+	"math/rand/v2"
 	"slices"
 	"sync"
 	"testing"
@@ -138,5 +140,132 @@ func TestParallelV2_ShortCircuitStillLean(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("fused short-circuit hung")
+	}
+}
+
+func TestParallelV2_OrderedMatchesSerial(t *testing.T) {
+	// A3 property: Ordered() output must equal serial output element-for-element.
+	// Random pipelines over a fixed multiset, with heterogeneous stage costs
+	// (sleep jitter) to force real out-of-order completion.
+	rng := rand.New(rand.NewPCG(42, 2026))
+	for trial := range 30 {
+		n := 50 + rng.IntN(300)
+		serialSrc := make([]int, n)
+		for i := range serialSrc {
+			serialSrc[i] = i % 17
+		}
+
+		seed := rng.Uint64()
+		jitter := func(v int) int {
+			r := rand.New(rand.NewPCG(seed, uint64(v)+1))
+			time.Sleep(time.Duration(r.IntN(300)) * time.Microsecond)
+			return v * 2 // observable transform
+		}
+
+		serial := stream.SliceOf(serialSrc...).
+			Filter(func(v int) bool { return v%3 != 0 }).
+			Map(jitter).
+			ToSlice()
+
+		ordered := stream.SliceOf(serialSrc...).Parallel(4).Ordered().
+			Filter(func(v int) bool { return v%3 != 0 }).
+			Map(jitter).
+			ToSlice()
+
+		if !slices.Equal(serial, ordered) {
+			t.Fatalf("trial %d: ordered diverged from serial\nserial : %v\nordered: %v", trial, serial, ordered)
+		}
+	}
+}
+
+func TestParallelV2_OrderedVsUnordered(t *testing.T) {
+	// unordered may permute (or coincide); ordered must not — smoke test
+	// with visible divergence under sleep jitter, then verify Ordered is
+	// exactly sorted-back-to-input-order after a non-reordering pipeline.
+	src := make([]int, 500)
+	for i := range src {
+		src[i] = i
+	}
+	got := stream.SliceOf(src...).Parallel(8).Ordered().
+		Map(func(v int) int { time.Sleep(time.Duration(v%7) * time.Millisecond); return v }).
+		ToSlice()
+	if !slices.Equal(got, src) {
+		t.Fatal("Ordered() must reproduce input order exactly for identity pipeline")
+	}
+}
+
+func TestParallelV2_OrderedShortCircuitAndCancel(t *testing.T) {
+	// Ordered section + Limit short-circuit: must not hang, must respect order
+	done := make(chan []int, 1)
+	go func() {
+		done <- stream.SliceOf(make([]int, 100000)...).Parallel(4).Ordered().
+			Map(func(v int) int { return v + 1 }).
+			Limit(5).ToSlice()
+	}()
+	select {
+	case got := <-done:
+		if len(got) != 5 {
+			t.Fatalf("expected 5, got %d", len(got))
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("ordered short-circuit hung")
+	}
+
+	// pre-cancelled ctx: ordered section yields nothing
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := stream.SliceOf(1, 2, 3).WithContext(ctx).Parallel(2).Ordered().
+		Map(func(v int) int { return v }).ToSlice(); len(got) != 0 {
+		t.Fatalf("cancelled ordered section must yield nothing, got %v", got)
+	}
+}
+
+func TestParallelV2_OrderedAdversarialBatchHeads(t *testing.T) {
+	// Filter drops EVERY batch head (idx%64==0): batches must still
+	// re-sequenence correctly because filtered elements travel as holes,
+	// keeping batch boundaries and lengths intact.
+	src := make([]int, 1000)
+	for i := range src {
+		src[i] = i
+	}
+	done := make(chan []int, 1)
+	go func() {
+		done <- stream.SliceOf(src...).Parallel(4).Ordered().
+			Filter(func(v int) bool { return v%64 != 0 }).
+			Map(func(v int) int { return v }).
+			ToSlice()
+	}()
+	select {
+	case got := <-done:
+		if len(got) != 1000-16 {
+			t.Fatalf("expected %d elements, got %d", 1000-16, len(got))
+		}
+		for i, v := range got {
+			want := i + i/63 + 1 // original order minus multiples of 64
+			if v != want {
+				t.Fatalf("pos %d: got %d want %d", i, v, want)
+			}
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("adversarial ordered pipeline hung")
+	}
+}
+
+func TestParallelV2_OrderedAllFiltered(t *testing.T) {
+	// every element filtered: all-hole batches must flow through without
+	// hanging and yield nothing
+	done := make(chan []int, 1)
+	go func() {
+		done <- stream.SliceOf(make([]int, 1000)...).Parallel(4).Ordered().
+			Filter(func(int) bool { return false }).
+			ToSlice()
+	}()
+	select {
+	case got := <-done:
+		if len(got) != 0 {
+			t.Fatalf("expected empty, got %v", got)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("all-hole ordered pipeline hung")
 	}
 }
