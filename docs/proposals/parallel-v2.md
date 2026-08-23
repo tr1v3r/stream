@@ -33,7 +33,30 @@ With near-free user work, `Parallel(n)` is a **large pessimization**. It only wi
 - Parallelizing stateful stages themselves (Sort stays materialize-then-sort).
 - Changing serial-mode performance or the lazy closure core.
 
-## 3. Core Design: Stage Fusion
+## 3. Core Design: Stage Fusion with Sectioned Concurrency
+
+### 3.0 Two parallelism models, both supported
+
+Per-op pools (v1) accidentally provided two things at once: **data parallelism** (n workers inside one op) and **pipeline parallelism** (adjacent ops' pools overlap — element 100 filtering while element 50 maps). Fusion keeps only the former. Both matter for different workloads:
+
+- Homogeneous light CPU stages → fusion wins (machinery cost dominates; inter-op channels are pure overhead).
+- Heterogeneous stages (IO-heavy then CPU-light) → per-stage sizing + pipeline overlap is the right model; channel cost is negligible against IO latency.
+
+Therefore: **a mid-chain `Parallel(n)` call closes the current section and opens a new one with n workers.** The section boundary flows through a channel — which is exactly what gives adjacent sections pipeline parallelism. Consecutive stateless ops *without* an intervening `Parallel` call fuse into a single function run by one pool.
+
+```go
+// Heterogeneous: full v1 expressiveness, sections sized per cost profile,
+// A's output flows into B while A is still producing (pipeline parallelism)
+stream.SliceOf(urls...).
+    Parallel(16).                              // section A: 16 workers for IO waits
+    Filter(func(u string) bool { return checkRemote(u) }).
+    Parallel(2).                               // closes A, opens B
+    Map(func(u string) string { return parse(u) })   // fuses with subsequent same-section ops
+
+// Homogeneous: one Parallel covers the run — full fusion, one pool
+stream.SliceOf(nums...).
+    Parallel(4).Filter(f).Map(g).Peek(log)
+```
 
 ### 3.1 Fusable stages
 
@@ -87,10 +110,11 @@ stream.SliceOf(data...).
 ```
 
 - `Parallel(n ≤ 0)` = no-op (v1 compat).
+- A second `Parallel(m)` mid-chain closes the current section and opens a new one with m workers (per-stage sizing preserved; see 3.0).
 - `Parallel(n).Ordered()` replaces nothing in v1 (new capability).
 - `.Ordered()` without a parallel section = no-op (safe default).
 
-**Compatibility note (breaking-ish):** v1 `Parallel(n)` scoped per-op; v2 scopes per-section. Old code relying on "only the next op runs parallel" will see *more* stages parallelized — strictly closer to user intent, but a release-note-worthy change ⇒ **v0.3.0**, not a patch.
+**Compatibility note (breaking-ish):** v1 `Parallel(n)` scoped per-op with an invisible rolling range; v2 scopes per-section with explicit boundaries (next `Parallel` call, stateful op, or type change). Old code chained like `.Parallel(4).Filter(f)` behaves identically; code chaining `.Parallel(4).Filter(f).Map(g)` now fuses both under one pool — strictly closer to intent, but a release-note-worthy change ⇒ **v0.3.0**, not a patch.
 
 ## 5. Acceptance Criteria (phase-gated)
 
@@ -101,6 +125,7 @@ stream.SliceOf(data...).
 | A3 order | `Ordered()` output equals serial output, element-for-element (property test, 1k random pipelines) |
 | A4 leak | existing leak test passes unchanged; new: ordered-mode + cancel mid-stream |
 | A5 regression | full suite + race + 100% statement coverage preserved |
+| A6 heterogeneous | IO-sim (200µs/element) `Parallel(16).Filter` + CPU-light `Parallel(2).Map` two-section pipeline ≥ 1.5× faster than single fused `Parallel(4)` — proving per-section sizing still pays |
 
 ## 6. Implementation Phases
 
@@ -120,6 +145,7 @@ Each phase lands as its own PR behind the acceptance gates above.
 
 ## 8. Alternatives Considered
 
+- **Fusion-only (initial draft of this proposal)**: rejected after review — it silently dropped v1's per-stage concurrency sizing, which is the right model for heterogeneous (IO vs CPU) stages; see 3.0 and gate A6.
 - **Keep v1, document the overhead**: honest but leaves the API a trap for every light-workload user (the common case).
 - **Worker-pool object with explicit `.Pool(p)` lifecycle**: rejected — breaks the declarative one-liner style; pools as user-managed resources invite leaks.
 - **Rely on `errgroup` + external composition**: rejects the library's reason to exist (integrated parallel pipelines).
