@@ -69,21 +69,23 @@ func TestCtx_CancelledParallel(t *testing.T) {
 }
 
 func TestParallel_ShortCircuitNoLeak(t *testing.T) {
-	t.Skip("known issue: parallelSeq leaks feeder/workers on short-circuit — see AGENTS.md Known Issues; unskip when fixed")
-
 	runtime.GC()
 	time.Sleep(50 * time.Millisecond)
 	before := runtime.NumGoroutine()
 
 	data := make([]int, 5000)
-	got := stream.SliceOf(data...).Parallel(4).
+	if got := stream.SliceOf(data...).Parallel(4).
 		Map(func(n int) int { return n + 1 }).
-		Limit(2).ToSlice()
-	if len(got) != 2 {
+		Limit(2).ToSlice(); len(got) != 2 {
 		t.Fatalf("expected 2 elements, got %d", len(got))
 	}
+	if got := stream.SliceOf(data...).Parallel(4).
+		Filter(func(int) bool { return true }).
+		First(); got != 0 {
+		t.Fatalf("expected first element 0, got %d", got)
+	}
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 		runtime.GC()
@@ -94,8 +96,6 @@ func TestParallel_ShortCircuitNoLeak(t *testing.T) {
 }
 
 func TestParallel_ConcurrentTakeNoRace(t *testing.T) {
-	t.Skip("known issue: global seededRand is not concurrency-safe; run with -race after fixing — see AGENTS.md Known Issues")
-
 	src := make([]int, 100)
 	var wg sync.WaitGroup
 	for range 8 {

@@ -83,9 +83,8 @@ golangci-lint run --config=.golangci.yml
 
 ## Known Issues (verified by repro, fix before relying on them)
 
-- **Goroutine leak in parallel short-circuit**: `parallelSeq` (`stream.go`) only unblocks workers on `ctx` cancellation; when a downstream `yield` returns false (e.g. `Limit` after `Parallel(n)`), feeder/workers block forever on channel sends under `context.Background`. Fix direction: derive a `context.WithCancel` inside `parallelSeq` and `defer cancel()`.
-- **Global `seededRand` is not concurrency-safe**: concurrent `Take()` calls race.
 - **`ErrUnsupportType` (`errors.go`) is dead code** — unused.
+- **`Execute()` drops `parallelSize`** — the eager snapshot silently re-enters serial mode (newStreamer does not carry the field).
 
 ## Common Development Tasks
 
@@ -93,6 +92,6 @@ When adding new stream operations:
 1. Add method to `Streamer` interface in `export.go`
 2. Implement in `streamer[T]` in `stream.go` (compose an `iter.Seq` closure; keep lazy)
 3. Update `sizeHint` propagation deliberately (see table above)
-4. For parallel support, use `parallelSeq` helper or handle `parallelSize > 0` — and check the short-circuit leak gotcha
-5. Add assertion-based tests: `factory_test.go` / `ops_test.go` / `terminal_test.go` / `parallel_test.go` hold the suite; parallel results must be compared as sorted multisets (order is not preserved). Two tests are committed behind `t.Skip` as executable specs for the known issues above — remove the skip when the fix lands and keep them green.
+4. For parallel support, use `parallelSeq` helper or handle `parallelSize > 0`; `parallelSeq` derives a cancellable child context and drains `out` on any exit — preserve that pattern so short-circuits and cancellation never leak goroutines
+5. Add assertion-based tests: `factory_test.go` / `ops_test.go` / `terminal_test.go` / `parallel_test.go` hold the suite; parallel results must be compared as sorted multisets (order is not preserved). `TestParallel_ShortCircuitNoLeak` and `TestParallel_ConcurrentTakeNoRace` guard the concurrency fixes — always run `-race` before shipping parallel changes.
 6. Update `README.md` and `doc.go` documentation
