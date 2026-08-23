@@ -32,3 +32,19 @@ func Test_Question1(t *testing.T) {
 func Test_Question3(t *testing.T) {
 	t.Logf("question 3-1: %s", Question3Sub1("hello ", 4))
 }
+
+func Test_Question1Sub2(t *testing.T) {
+	emps := make([]*Employee, 15)
+	for i := range emps {
+		emps[i] = &Employee{ID: int64(15 - i)} // IDs 15..1, shuffled input
+	}
+	got := Question1Sub2(emps)
+	if len(got) != 10 {
+		t.Fatalf("expected 10 employees, got %d", len(got))
+	}
+	for i, e := range got {
+		if e.ID != int64(i+1) {
+			t.Fatalf("expected ascending IDs, position %d has id %d", i, e.ID)
+		}
+	}
+}

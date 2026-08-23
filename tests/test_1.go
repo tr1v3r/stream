@@ -25,7 +25,7 @@ func Question1Sub2(employees []*Employee) []*Employee {
 			return -1
 		}
 		if left.ID > right.ID {
-			return -1
+			return 1
 		}
 		return 0
 	}).Limit(10).ToSlice()

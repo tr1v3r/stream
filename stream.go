@@ -3,10 +3,9 @@ package stream
 import (
 	"context"
 	"iter"
-	"math/rand"
+	"math/rand/v2"
 	"sort"
 	"sync"
-	"time"
 
 	"github.com/tr1v3r/stream/types"
 )
@@ -14,8 +13,6 @@ import (
 var (
 	_ Streamer[any]     = newStreamer[any](nil, 0)
 	_ Streamer[float64] = newStreamer[float64](nil, 0)
-
-	seededRand = rand.New(rand.NewSource(time.Now().UnixNano()))
 )
 
 func materialize[T any](seq iter.Seq[T]) []T {
@@ -55,10 +52,16 @@ func (s streamer[T]) WithContext(ctx context.Context) Streamer[T] {
 }
 
 // parallelSeq fans out elements to N workers and collects results.
+// It derives a cancellable child context so that an early consumer exit
+// (short-circuit) or parent cancellation releases the feeder, workers,
+// and closer goroutines instead of leaking them.
 func (s *streamer[T]) parallelSeq(work func(T, chan<- T)) iter.Seq[T] {
 	prev := s.seq
 	n := s.parallelSize
 	return func(yield func(T) bool) {
+		ctx, cancel := context.WithCancel(s.ctx)
+		defer cancel()
+
 		in := make(chan T, 1024)
 		out := make(chan T, 1024)
 
@@ -66,8 +69,13 @@ func (s *streamer[T]) parallelSeq(work func(T, chan<- T)) iter.Seq[T] {
 			defer close(in)
 			for v := range prev {
 				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				select {
 				case in <- v:
-				case <-s.ctx.Done():
+				case <-ctx.Done():
 					return
 				}
 			}
@@ -79,7 +87,7 @@ func (s *streamer[T]) parallelSeq(work func(T, chan<- T)) iter.Seq[T] {
 			go func() {
 				defer wg.Done()
 				for v := range in {
-					if s.cancelled() {
+					if ctx.Err() != nil {
 						return
 					}
 					work(v, out)
@@ -92,8 +100,17 @@ func (s *streamer[T]) parallelSeq(work func(T, chan<- T)) iter.Seq[T] {
 			close(out)
 		}()
 
+		// On any exit (natural, short-circuit, cancellation) stop the
+		// pipeline and drain out until it is closed, so workers blocked
+		// on send are released.
+		defer func() {
+			cancel()
+			for range out {
+			}
+		}()
+
 		for v := range out {
-			if s.cancelled() || !yield(v) {
+			if ctx.Err() != nil || !yield(v) {
 				return
 			}
 		}
@@ -304,15 +321,16 @@ func (s *streamer[T]) Skip(n int64) Streamer[T] {
 func (s *streamer[T]) Pick(start, end, interval int) Streamer[T] {
 	prev := s.seq
 	return s.wrap(func(yield func(T) bool) {
-		// Resolve negative end: use sizeHint if known, otherwise materialize
+		if start < 0 || interval <= 0 {
+			return
+		}
+		// Resolve negative end (last index): use sizeHint if known,
+		// otherwise materialize to find out
 		if end < 0 {
 			if s.sizeHint >= 0 {
 				end = int(s.sizeHint) - 1
 			} else {
 				data := materialize(prev)
-				if start < 0 || interval <= 0 {
-					return
-				}
 				for i := start; i < len(data); i += interval {
 					if !yield(data[i]) {
 						return
@@ -320,9 +338,6 @@ func (s *streamer[T]) Pick(start, end, interval int) Streamer[T] {
 				}
 				return
 			}
-		}
-		if start < 0 || interval <= 0 {
-			return
 		}
 		idx := 0
 		for v := range prev {
@@ -361,7 +376,8 @@ func (s *streamer[T]) Append(data ...T) Streamer[T] {
 
 func (s *streamer[T]) Execute() Streamer[T] {
 	data := materialize(s.seq)
-	return newStreamer(seqFromSlice(data), int64(len(data))).WithContext(s.ctx)
+	// keep ctx and parallelSize so downstream ops behave as before the snapshot
+	return &streamer[T]{ctx: s.ctx, seq: seqFromSlice(data), sizeHint: int64(len(data)), parallelSize: s.parallelSize}
 }
 
 func (s streamer[T]) Parallel(n int) Streamer[T] {
@@ -477,7 +493,7 @@ func (s *streamer[T]) Take() T {
 		var zero T
 		return zero
 	}
-	return data[seededRand.Int63n(int64(len(data)))]
+	return data[rand.IntN(len(data))]
 }
 
 func (s *streamer[T]) Any() T { return s.Take() }

@@ -2,7 +2,7 @@
 
 A Go stream processing library that brings Java Streams-like functional operations to Go collections using generics and `iter.Seq`.
 
-Requires Go 1.23+.
+Requires Go 1.24+ (see `go.mod`).
 
 ## Features
 
@@ -50,8 +50,6 @@ func main() {
 | `Repeat[T](t T)` | Create an infinite stream repeating `t` |
 | `RepeatN[T](t T, n int64)` | Create a stream repeating `t` exactly `n` times |
 | `Concat[T](dst, ...src)` | Concatenate multiple streams |
-| `From[T](seq, sizeHint)` | Create from a Go `iter.Seq[T]` |
-| `From2[K, V](seq)` | Create from a Go `iter.Seq2[K, V]` |
 
 ```go
 // From an iter.Seq

@@ -52,7 +52,7 @@ golangci-lint run --config=.golangci.yml
 
 ### Package Structure (flat layout — NOT nested under stream/)
 
-- Root package `stream`: `export.go`, `stream.go`, `factory.go`, `helper.go`, `errors.go`, `doc.go`, `export_test.go`
+- Root package `stream`: `export.go`, `stream.go`, `factory.go`, `helper.go`, `doc.go`, `export_test.go`
 - `types/`: Functional interface type definitions
 - `tests/`: Exercise-style test cases and examples (excluded from lint)
 
@@ -81,12 +81,9 @@ golangci-lint run --config=.golangci.yml
 - `Sort`, `ReverseSort`, `Reverse`, `Append`: hint preserved / additive
 - `Count()` short-circuits to `sizeHint` when known — keep the hint honest when adding ops
 
-## Known Issues (verified by repro, fix before relying on them)
+## Known Issues
 
-- **Goroutine leak in parallel short-circuit**: `parallelSeq` (`stream.go`) only unblocks workers on `ctx` cancellation; when a downstream `yield` returns false (e.g. `Limit` after `Parallel(n)`), feeder/workers block forever on channel sends under `context.Background`. Fix direction: derive a `context.WithCancel` inside `parallelSeq` and `defer cancel()`.
-- **Global `seededRand` is not concurrency-safe**: concurrent `Take()` calls race.
-- **`ErrUnsupportType` (`errors.go`) is dead code** — unused.
-- **`tests/test_1.go` `Question1Sub2` comparator bug**: `left.ID > right.ID` returns `-1` (should be `1`).
+- None currently. Historical issues (parallel goroutine leak, seededRand race, empty-stream Take panic, negative Pick index, parallel Distinct crash, Execute dropping parallelSize) are fixed and guarded by regression tests in `parallel_test.go` / `export_test.go`.
 
 ## Common Development Tasks
 
@@ -94,6 +91,6 @@ When adding new stream operations:
 1. Add method to `Streamer` interface in `export.go`
 2. Implement in `streamer[T]` in `stream.go` (compose an `iter.Seq` closure; keep lazy)
 3. Update `sizeHint` propagation deliberately (see table above)
-4. For parallel support, use `parallelSeq` helper or handle `parallelSize > 0` — and check the short-circuit leak gotcha
-5. Add assertion-based tests in `export_test.go` (print-only tests are not enough; existing `TestStream`/`TestStream_1` are print-style legacy)
+4. For parallel support, use `parallelSeq` helper or handle `parallelSize > 0`; `parallelSeq` derives a cancellable child context and drains `out` on any exit — preserve that pattern so short-circuits and cancellation never leak goroutines
+5. Add assertion-based tests: `factory_test.go` / `ops_test.go` / `terminal_test.go` / `parallel_test.go` hold the suite; parallel results must be compared as sorted multisets (order is not preserved). `TestParallel_ShortCircuitNoLeak` and `TestParallel_ConcurrentTakeNoRace` guard the concurrency fixes — always run `-race` before shipping parallel changes.
 6. Update `README.md` and `doc.go` documentation
