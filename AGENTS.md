@@ -1,0 +1,101 @@
+# AGENTS.md
+
+This file provides guidance for AI coding agents (Claude Code, Codex, etc.) working in this repository.
+
+> Note: `CLAUDE.md` is a symlink to this file. Edit **AGENTS.md** only — never edit through the symlink target name.
+
+## Project Overview
+
+Go stream processing library (`github.com/tr1v3r/stream`) providing Java Streams-like functionality. Core pipeline representation is `iter.Seq[T]` (Go 1.23+), enabling true lazy evaluation with short-circuit support. Zero external dependencies; `go.sum` is empty. `go.mod` declares `go 1.24.0`.
+
+## Development Commands
+
+```bash
+# Run all tests
+go test ./...
+
+# Run tests with verbose output / race detector
+go test ./... -v
+go test ./... -race   # recommended for anything touching Parallel()
+
+# Run linting (tests/ dir is excluded via .golangci.yml skip-dirs)
+golangci-lint run --config=.golangci.yml
+```
+
+## Architecture
+
+### Core Components
+
+1. **Streamer Interface** (`export.go`): Main interface defining stream operations
+   - Stateless operations: `Filter`, `Map`, `Convert`, `Peek`, `FlatMap`
+   - Stateful operations: `Distinct`, `Sort`, `ReverseSort`, `Reverse`, `Limit`, `Skip`, `Pick`
+   - Terminal operations: `ToSlice`, `Collect`, `ForEach`, `Reduce`, `Count`, `Seq`
+   - Match operations: `AllMatch`, `NonMatch`, `AnyMatch`
+   - Element operations: `First`, `Take`, `Any`, `Last`
+   - Reduce variants: `Reduce`, `ReduceFrom`, `ReduceWith`, `ReduceBy`
+
+2. **Stream Implementation** (`stream.go`): Core `streamer[T]` struct
+   - Holds `iter.Seq[T]` as internal pipeline
+   - `ctx context.Context` for cancellation (`WithContext` to set)
+   - `sizeHint int64` for known-size optimizations (-1 for unknown)
+   - `parallelSize int` for concurrent processing mode (0=sync)
+   - All intermediate ops compose `iter.Seq[T]` closures (true lazy)
+   - `parallelSeq` helper: feeder goroutine → N workers → out channel
+   - `Sortable[T]` for sort.Interface support
+
+3. **Factory Functions** (`factory.go`): `SliceOf`, `Repeat`, `RepeatN`, `Concat`, `From` (from `iter.Seq[T]`), `From2` (from `iter.Seq2[K,V]`, values only)
+
+4. **Helper Functions** (`helper.go`)
+   - `To[T, R]`: Convert slice type with converter function
+   - `AnyTo[T]`: Convert `[]any` to typed slice
+   - `distinctJudge`: Internal distinct filter using `fmt.Sprint` or `types.Unique`
+
+### Package Structure (flat layout — NOT nested under stream/)
+
+- Root package `stream`: `export.go`, `stream.go`, `factory.go`, `helper.go`, `errors.go`, `doc.go`, `export_test.go`
+- `types/`: Functional interface type definitions
+- `tests/`: Exercise-style test cases and examples (excluded from lint)
+
+### Type Definitions (`types/type.go`)
+
+`Judge[T]`, `Mapper[T]`, `Converter[T,R]`, `Comparator[T]`, `Consumer[T]`, `BinaryOperator[T]`, `Accumulator[T,R]`, `Collector[T]`, and `Unique` interface (custom distinct key via `Key() string`).
+
+## Important Implementation Details
+
+### Critical Gotchas
+
+- **Streams are single-use**: A terminal operation consumes the underlying `iter.Seq`. Create a new stream for each pipeline.
+- **Lazy evaluation**: Intermediate operations compose closures without executing. `Limit(1)` + `First()` on a million elements processes only 1 element.
+- **Distinct uses `fmt.Sprint`** for hashing by default (`1` and `"1"` collide). Implement `types.Unique` for custom hash keys.
+- **`Convert` and `FlatMap` produce `Streamer[any]`**: Type info is lost; use `AnyTo[T]()` or `To[T, R]()` to convert back.
+- **Parallel mode does not preserve order**. Also note: only `Filter`/`Map`/`Peek` have parallel branches — `Convert`, `FlatMap`, `Sort`, `Reverse` silently ignore `Parallel(n)`.
+- **Each parallel-aware op spawns its own worker pool**: `Parallel(4).Filter(...).Map(...)` = two chained pools; keep pipelines short or expect overhead.
+- **`Pick` with negative `end`** must materialize the entire stream to determine size.
+
+### sizeHint Propagation
+
+- `Filter`, `Distinct`, `FlatMap`, `Pick`: hint becomes -1
+- `Map`, `Peek`, `Convert`: hint preserved
+- `Limit(n)`: min(hint, n) if hint >= 0
+- `Skip(n)`: max(0, hint - n) if hint >= 0
+- `Sort`, `ReverseSort`, `Reverse`, `Append`: hint preserved / additive
+- `Count()` short-circuits to `sizeHint` when known — keep the hint honest when adding ops
+
+## Known Issues (verified by repro, fix before relying on them)
+
+- **Goroutine leak in parallel short-circuit**: `parallelSeq` (`stream.go`) only unblocks workers on `ctx` cancellation; when a downstream `yield` returns false (e.g. `Limit` after `Parallel(n)`), feeder/workers block forever on channel sends under `context.Background`. Fix direction: derive a `context.WithCancel` inside `parallelSeq` and `defer cancel()`.
+- **`Take()`/`Any()` panic on empty stream**: `seededRand.Int63n(0)` — needs a `len(data) == 0` guard returning the zero value.
+- **`Pick` with negative `start` and negative `end`**: hits `data[start]` with negative index → panic.
+- **Global `seededRand` is not concurrency-safe**: concurrent `Take()` calls race.
+- **`ErrUnsupportType` (`errors.go`) is dead code** — unused.
+- **`tests/test_1.go` `Question1Sub2` comparator bug**: `left.ID > right.ID` returns `-1` (should be `1`).
+
+## Common Development Tasks
+
+When adding new stream operations:
+1. Add method to `Streamer` interface in `export.go`
+2. Implement in `streamer[T]` in `stream.go` (compose an `iter.Seq` closure; keep lazy)
+3. Update `sizeHint` propagation deliberately (see table above)
+4. For parallel support, use `parallelSeq` helper or handle `parallelSize > 0` — and check the short-circuit leak gotcha
+5. Add assertion-based tests in `export_test.go` (print-only tests are not enough; existing `TestStream`/`TestStream_1` are print-style legacy)
+6. Update `README.md` and `doc.go` documentation
