@@ -1,5 +1,10 @@
 # stream
 
+[![CI](https://github.com/tr1v3r/stream/actions/workflows/ci.yml/badge.svg)](https://github.com/tr1v3r/stream/actions/workflows/ci.yml)
+[![Go Version](https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go)](https://go.dev)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+[![Go Reference](https://pkg.go.dev/badge/github.com/tr1v3r/stream.svg)](https://pkg.go.dev/github.com/tr1v3r/stream)
+
 A Go stream processing library that brings Java Streams-like functional operations to Go collections using generics and `iter.Seq`.
 
 Requires Go 1.26+ (see `go.mod`).
