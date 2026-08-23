@@ -2,9 +2,10 @@ package stream
 
 import (
 	"context"
+	"fmt"
 	"iter"
 	"math/rand/v2"
-	"sort"
+	"slices"
 	"sync"
 
 	"github.com/tr1v3r/stream/types"
@@ -23,15 +24,7 @@ func materialize[T any](seq iter.Seq[T]) []T {
 	return result
 }
 
-func seqFromSlice[T any](s []T) iter.Seq[T] {
-	return func(yield func(T) bool) {
-		for _, v := range s {
-			if !yield(v) {
-				return
-			}
-		}
-	}
-}
+func seqFromSlice[T any](s []T) iter.Seq[T] { return slices.Values(s) }
 
 type streamer[T any] struct {
 	ctx          context.Context
@@ -83,16 +76,14 @@ func (s *streamer[T]) parallelSeq(work func(T, chan<- T)) iter.Seq[T] {
 
 		var wg sync.WaitGroup
 		for range n {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				for v := range in {
 					if ctx.Err() != nil {
 						return
 					}
 					work(v, out)
 				}
-			}()
+			})
 		}
 
 		go func() {
@@ -213,15 +204,41 @@ func (s *streamer[T]) FlatMap(f func(T) Streamer[any]) Streamer[any] {
 	}, sizeHint: -1}
 }
 
-// Distinct always runs serially: distinctJudge's shared key map is not
-// concurrency-safe, so it bypasses Filter's parallel branch even when
-// parallelSize > 0.
+// Distinct removes duplicate elements, keeping first occurrences. Keys come
+// from fmt.Sprint (or types.Unique), so int 1 and string "1" collide — prefer
+// DistinctBy for exact keys.
 func (s *streamer[T]) Distinct() Streamer[T] {
-	judge := distinctJudge[T]()
-	prev := s.seq
-	return s.wrap(func(yield func(T) bool) {
+	return DistinctBy(s, func(t T) string {
+		if keyer, ok := any(t).(types.Unique); ok {
+			return keyer.Key()
+		}
+		return fmt.Sprint(t)
+	})
+}
+
+// DistinctBy removes elements whose key, produced by key, has already been
+// seen, keeping first occurrences. Keys use Go map equality (K comparable),
+// avoiding the string-coercion collisions of Distinct. Like Distinct it runs
+// serially — the shared key map is not concurrency-safe — while preserving
+// parallelSize for downstream operations.
+func DistinctBy[T any, K comparable](s Streamer[T], key func(T) K) Streamer[T] {
+	seen := make(map[K]struct{})
+	judge := func(t T) bool {
+		k := key(t)
+		if _, dup := seen[k]; dup {
+			return false
+		}
+		seen[k] = struct{}{}
+		return true
+	}
+	st, ok := s.(*streamer[T])
+	if !ok {
+		return s.Filter(judge) // foreign Streamer implementations
+	}
+	prev := st.seq
+	return st.wrap(func(yield func(T) bool) {
 		for v := range prev {
-			if s.cancelled() {
+			if st.cancelled() {
 				return
 			}
 			if judge(v) && !yield(v) {
@@ -236,7 +253,7 @@ func (s *streamer[T]) Sort(comparator types.Comparator[T]) Streamer[T] {
 	hint := s.sizeHint
 	return s.wrap(func(yield func(T) bool) {
 		data := materialize(prev)
-		sort.Sort(&Sortable[T]{List: data, Cmp: comparator})
+		slices.SortFunc(data, comparator)
 		for _, v := range data {
 			if !yield(v) {
 				return
@@ -250,7 +267,7 @@ func (s *streamer[T]) ReverseSort(comparator types.Comparator[T]) Streamer[T] {
 	hint := s.sizeHint
 	return s.wrap(func(yield func(T) bool) {
 		data := materialize(prev)
-		sort.Sort(sort.Reverse(&Sortable[T]{List: data, Cmp: comparator}))
+		slices.SortFunc(data, func(a, b T) int { return comparator(b, a) })
 		for _, v := range data {
 			if !yield(v) {
 				return
@@ -264,9 +281,7 @@ func (s *streamer[T]) Reverse() Streamer[T] {
 	hint := s.sizeHint
 	return s.wrap(func(yield func(T) bool) {
 		data := materialize(prev)
-		for i, j := 0, len(data)-1; i < j; i, j = i+1, j-1 {
-			data[i], data[j] = data[j], data[i]
-		}
+		slices.Reverse(data)
 		for _, v := range data {
 			if !yield(v) {
 				return
@@ -520,12 +535,3 @@ func (s *streamer[T]) Count() int64 {
 func (s *streamer[T]) Seq() iter.Seq[T] {
 	return s.seq
 }
-
-type Sortable[T any] struct {
-	List []T
-	Cmp  types.Comparator[T]
-}
-
-func (a *Sortable[T]) Len() int           { return len(a.List) }
-func (a *Sortable[T]) Less(i, j int) bool { return a.Cmp(a.List[i], a.List[j]) < 0 }
-func (a *Sortable[T]) Swap(i, j int)      { a.List[i], a.List[j] = a.List[j], a.List[i] }
