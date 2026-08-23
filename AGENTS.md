@@ -38,9 +38,10 @@ golangci-lint run --config=.golangci.yml
    - Holds `iter.Seq[T]` as internal pipeline
    - `ctx context.Context` for cancellation (`WithContext` to set)
    - `sizeHint int64` for known-size optimizations (-1 for unknown)
-   - `parallelSize int` for concurrent processing mode (0=sync)
+   - `parallelSize int` for concurrent section workers (0=sync)
+   - `ordered bool` marks an order-preserving section
    - All intermediate ops compose `iter.Seq[T]` closures (true lazy)
-   - `parallelSeq` helper: feeder goroutine → N workers → out channel
+   - Parallel sections: `fused func(T) (T, bool)` accumulates stateless stages; `flushFused` runs them on one worker pool (`fusedFeeder`/`fusedWorkers`, or `orderedFeeder`/`orderedWorkers`/`orderedYield` for `Ordered()`)
    - Sorting via `slices.SortFunc` (type-safe pdqsort, no sort.Interface adapter)
 
 3. **Factory Functions** (`factory.go`): `SliceOf`, `Repeat`, `RepeatN`, `Concat`, `From` (from `iter.Seq[T]`), `From2` (from `iter.Seq2[K,V]`, values only)
@@ -68,8 +69,8 @@ golangci-lint run --config=.golangci.yml
 - **Lazy evaluation**: Intermediate operations compose closures without executing. `Limit(1)` + `First()` on a million elements processes only 1 element.
 - **Distinct uses `fmt.Sprint`** for hashing by default (`1` and `"1"` collide). Implement `types.Unique` for custom hash keys, or prefer the generic `DistinctBy[T, K comparable]` for exact keys (also much faster: no boxing).
 - **`Convert` and `FlatMap` produce `Streamer[any]`**: Type info is lost; prefer the generic `stream.MapTo[T, R]` (Convert is deprecated and delegates to it). Trade-off: MapTo is a function, so it interrupts method chaining at the type-changing point — recommend it for head-of-pipeline type changes (chaining resumes below); Convert stays acceptable for mid-chain changes in throwaway code. For FlatMap, use `AnyTo[T]()` or `To[T, R]()` to convert back.
-- **Parallel mode does not preserve order**. Also note: only `Filter`/`Map`/`Peek` have parallel branches — `Convert`, `FlatMap`, `Sort`, `Reverse`, and `Distinct` (serial by design, see stream.go) silently ignore `Parallel(n)`.
-- **Each parallel-aware op spawns its own worker pool**: `Parallel(4).Filter(...).Map(...)` = two chained pools; keep pipelines short or expect overhead.
+- **Parallel sections are unordered by default** (`Ordered()` opts into serial-order output; see docs/proposals/parallel-v2.md). Parallelism is section-scoped: `Parallel(n)` opens a fused section (single pool over Filter/Map/Peek chains, 64-element batches); sections close at stateful ops, type changes, terminals, and the next `Parallel` call. `Convert`/`FlatMap`/`Sort`/`Reverse`/`Distinct` therefore run serially after a section closes (Distinct is serial by design — shared key map).
+- **v1 per-op pools are gone**: sections fuse stateless ops into one pool (machinery overhead went from 14-21x to 1-2x serial on near-free workloads). The leak-freedom pattern lives in `flushFused`/`orderedSeq`; ordered re-sequencing is batch-keyed with hole placeholders — see the proposal's design-journey note before touching it.
 - **`Pick` with negative `end`** must materialize the entire stream to determine size.
 
 ### sizeHint Propagation
@@ -87,7 +88,7 @@ golangci-lint run --config=.golangci.yml
 
 ## Deliberate Trade-offs
 
-- **Leak detection stays NumGoroutine-based (no goleak)**: `TestParallel_ShortCircuitNoLeak` polls `runtime.NumGoroutine` with a 5s deadline instead of using `go.uber.org/goleak` stack-snapshot comparison. Decision: the zero-dependency property (empty go.sum) outweighs the precision gain — the single concurrency primitive (`parallelSeq`) has one deterministic leak test, verified stable across 10+ local runs. Re-evaluate when the parallel architecture v2 lands (more goroutine paths would justify goleak or a hand-rolled ~40-line `runtime.Stack` diff).
+- **Leak detection stays NumGoroutine-based (no goleak)**: `TestParallel_ShortCircuitNoLeak` polls `runtime.NumGoroutine` with a 5s deadline instead of using `go.uber.org/goleak` stack-snapshot comparison. Decision: the zero-dependency property (empty go.sum) outweighs the precision gain. Parallel v2 has added goroutine paths (fused/ordered feeders and workers), but they all instantiate the one shared cancel/drain pattern in `flushFused`/`orderedSeq` and are exercised by the leak, short-circuit, and A3 property tests. Re-evaluate if section kinds multiply further (a hand-rolled ~40-line `runtime.Stack` diff remains the zero-dependency option).
 
 ## Common Development Tasks
 
@@ -95,6 +96,6 @@ When adding new stream operations:
 1. Add method to `Streamer` interface in `export.go`
 2. Implement in `streamer[T]` in `stream.go` (compose an `iter.Seq` closure; keep lazy)
 3. Update `sizeHint` propagation deliberately (see table above)
-4. For parallel support, use `parallelSeq` helper or handle `parallelSize > 0`. Leak-freedom pattern (keep it): `parallelSeq` derives a cancellable child ctx; the feeder has a single cancellation exit (top-of-loop check, plain blocking send — workers always drain `in`, discarding after cancel); the consumer drains `out` on any exit. Avoid select-with-Done on the feeder send: when both cases are ready Go picks randomly, which made coverage and exit paths nondeterministic.
+4. For parallel support, accumulate into the fused section (`fused` + `thenFused`) and let `ensureFlushed`/`effectiveSeq` close it. Leak-freedom pattern (keep it): `flushFused`/`orderedSeq` derive a cancellable child ctx; the feeder has a single cancellation exit (top-of-loop check, plain blocking send — workers always drain `in`, discarding after cancel); the consumer drains `out` on any exit. Avoid select-with-Done on the feeder send: when both cases are ready Go picks randomly, which made coverage and exit paths nondeterministic.
 5. Add assertion-based tests: `factory_test.go` / `ops_test.go` / `terminal_test.go` / `parallel_test.go` / `branch_test.go` hold the suite (statement coverage 100%); parallel results must be compared as sorted multisets (order is not preserved). `TestParallel_ShortCircuitNoLeak` and `TestParallel_ConcurrentTakeNoRace` guard the concurrency fixes — always run `-race` before shipping parallel changes. `branch_test.go` covers defensive branches (mid-stream cancellation, downstream short-circuit per op, Pick materialize path, foreign Streamer fallback) — extend it when adding new branches.
 6. Update `README.md` and `doc.go` documentation

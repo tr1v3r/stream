@@ -1,6 +1,6 @@
 # Proposal: Parallel Architecture v2 — Stage Fusion, One Pool, Optional Order
 
-Status: **Draft — for review, no implementation yet**
+Status: **Implemented — Phases 1 & 2 landed (PR #15, PR #16); gates A1–A6 measured and passing. This document is now the authoritative semantics reference.**
 
 ## 1. Motivation (measured, v0.2.0)
 
