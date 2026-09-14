@@ -16,9 +16,16 @@ var (
 	_ Streamer[float64] = newStreamer[float64](nil, 0)
 )
 
-func materialize[T any](seq iter.Seq[T]) []T {
+// materialize drains seq into a slice, consulting ctx at every element
+// boundary: once cancelled it stops pulling and returns promptly — empty
+// when cancelled before iteration starts, the elements pulled so far when
+// cancelled mid-stream (the partial-result semantics of the Reduce family).
+func materialize[T any](ctx context.Context, seq iter.Seq[T]) []T {
 	result := make([]T, 0, 64)
 	for v := range seq {
+		if ctx.Err() != nil {
+			return result
+		}
 		result = append(result, v)
 	}
 	return result
@@ -49,7 +56,10 @@ func newStreamer[T any](seq iter.Seq[T], sizeHint int64) *streamer[T] {
 
 func (s *streamer[T]) cancelled() bool { return s.ctx.Err() != nil }
 
-// WithContext implements Streamer.WithContext; the context is consulted by later operations on the returned stream.
+// WithContext implements Streamer.WithContext; the context is consulted by
+// later operations on the returned stream, and by every terminal at each
+// element boundary (cooperative cancellation — a source that never yields
+// an element cannot be interrupted).
 func (s streamer[T]) WithContext(ctx context.Context) Streamer[T] {
 	s.ctx = ctx
 	return &s
@@ -499,11 +509,12 @@ func DistinctBy[T any, K comparable](s Streamer[T], key func(T) K) Streamer[T] {
 }
 
 // Sort implements Streamer.Sort via slices.SortFunc; materializes the stage when iterated. A parallel section closes first.
+// A cancelled context stops the materialization promptly (empty when cancelled up front).
 func (s *streamer[T]) Sort(comparator types.Comparator[T]) Streamer[T] {
 	prev := s.ensureFlushed().seq
 	hint := s.sizeHint
 	return s.wrap(func(yield func(T) bool) {
-		data := materialize(prev)
+		data := materialize(s.ctx, prev)
 		slices.SortFunc(data, comparator)
 		for _, v := range data {
 			if !yield(v) {
@@ -514,11 +525,12 @@ func (s *streamer[T]) Sort(comparator types.Comparator[T]) Streamer[T] {
 }
 
 // ReverseSort implements Streamer.ReverseSort via slices.SortFunc with inverted comparator. A parallel section closes first.
+// A cancelled context stops the materialization promptly (empty when cancelled up front).
 func (s *streamer[T]) ReverseSort(comparator types.Comparator[T]) Streamer[T] {
 	prev := s.ensureFlushed().seq
 	hint := s.sizeHint
 	return s.wrap(func(yield func(T) bool) {
-		data := materialize(prev)
+		data := materialize(s.ctx, prev)
 		slices.SortFunc(data, func(a, b T) int { return comparator(b, a) })
 		for _, v := range data {
 			if !yield(v) {
@@ -529,11 +541,12 @@ func (s *streamer[T]) ReverseSort(comparator types.Comparator[T]) Streamer[T] {
 }
 
 // Reverse implements Streamer.Reverse by materializing and reversing in place. A parallel section closes first.
+// A cancelled context stops the materialization promptly (empty when cancelled up front).
 func (s *streamer[T]) Reverse() Streamer[T] {
 	prev := s.ensureFlushed().seq
 	hint := s.sizeHint
 	return s.wrap(func(yield func(T) bool) {
-		data := materialize(prev)
+		data := materialize(s.ctx, prev)
 		slices.Reverse(data)
 		for _, v := range data {
 			if !yield(v) {
@@ -589,6 +602,7 @@ func (s *streamer[T]) Skip(n int64) Streamer[T] {
 }
 
 // Pick implements Streamer.Pick over absolute indices with interval stepping. A parallel section closes first.
+// A cancelled context stops the stage promptly (empty when cancelled up front).
 func (s *streamer[T]) Pick(start, end, interval int) Streamer[T] {
 	prev := s.ensureFlushed().seq
 	return s.wrap(func(yield func(T) bool) {
@@ -601,7 +615,7 @@ func (s *streamer[T]) Pick(start, end, interval int) Streamer[T] {
 			if s.sizeHint >= 0 {
 				end = int(s.sizeHint) - 1
 			} else {
-				data := materialize(prev)
+				data := materialize(s.ctx, prev)
 				for i := start; i < len(data); i += interval {
 					if !yield(data[i]) {
 						return
@@ -612,6 +626,9 @@ func (s *streamer[T]) Pick(start, end, interval int) Streamer[T] {
 		}
 		idx := 0
 		for v := range prev {
+			if s.cancelled() {
+				return
+			}
 			if idx > end {
 				return
 			}
@@ -647,8 +664,9 @@ func (s *streamer[T]) Append(data ...T) Streamer[T] {
 }
 
 // Execute implements Streamer.Execute; ctx and parallelSize carry over to the snapshot.
+// A cancelled context yields an empty snapshot promptly.
 func (s *streamer[T]) Execute() Streamer[T] {
-	data := materialize(s.ensureFlushed().seq)
+	data := materialize(s.ctx, s.ensureFlushed().seq)
 	// keep ctx and parallelSize so downstream ops behave as before the snapshot
 	return &streamer[T]{ctx: s.ctx, seq: seqFromSlice(data), sizeHint: int64(len(data)), parallelSize: s.parallelSize, ordered: s.ordered}
 }
@@ -678,9 +696,11 @@ func (s streamer[T]) Ordered() Streamer[T] {
 	return &s
 }
 
-// ToSlice implements Streamer.ToSlice.
+// ToSlice implements Streamer.ToSlice; consults the stream's context at
+// every element boundary, so a cancelled context returns promptly (empty
+// when cancelled up front).
 func (s *streamer[T]) ToSlice() []T {
-	return materialize(s.effectiveSeq())
+	return materialize(s.ctx, s.effectiveSeq())
 }
 
 // Collect implements Streamer.Collect by draining into the caller's collector.
@@ -780,9 +800,13 @@ func (s *streamer[T]) ReduceBy(initValueBuilder func(sizeMayNegative int) any, a
 }
 
 // First implements Streamer.First; stops the pipeline after one element.
+// A cancelled context yields the zero value.
 func (s *streamer[T]) First() T {
 	var zero T
 	for v := range s.effectiveSeq() {
+		if s.cancelled() {
+			return zero
+		}
 		return v
 	}
 	return zero
@@ -812,28 +836,49 @@ func (s *streamer[T]) Take() T {
 // Any implements Streamer.Any as an alias for Take.
 func (s *streamer[T]) Any() T { return s.Take() }
 
-// Last implements Streamer.Last by consuming the whole stream.
+// Last implements Streamer.Last by consuming the whole stream; consults
+// the context at every element boundary, so a cancelled context returns
+// promptly (zero value when cancelled up front).
 func (s *streamer[T]) Last() T {
 	var result T
 	for v := range s.effectiveSeq() {
+		if s.cancelled() {
+			return result
+		}
 		result = v
 	}
 	return result
 }
 
-// Count implements Streamer.Count; O(1) when sizeHint is known.
+// Count implements Streamer.Count; O(1) when sizeHint is known. The
+// iteration path consults the context at every element boundary and
+// returns the count pulled so far once cancelled (0 when cancelled up
+// front); the O(1) fast path does not consume the stream and does not
+// consult the context.
 func (s *streamer[T]) Count() int64 {
 	if s.sizeHint >= 0 {
 		return s.sizeHint
 	}
 	var count int64
 	for range s.effectiveSeq() {
+		if s.cancelled() {
+			return count
+		}
 		count++
 	}
 	return count
 }
 
-// Seq implements Streamer.Seq.
+// Seq implements Streamer.Seq; the returned sequence consults the stream's
+// context at every element boundary, so range loops stop pulling once it
+// is cancelled (bare pipelines honor WithContext too).
 func (s *streamer[T]) Seq() iter.Seq[T] {
-	return s.effectiveSeq()
+	seq := s.effectiveSeq()
+	return func(yield func(T) bool) {
+		for v := range seq {
+			if s.cancelled() || !yield(v) {
+				return
+			}
+		}
+	}
 }

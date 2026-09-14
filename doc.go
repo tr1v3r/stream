@@ -75,5 +75,8 @@
 //
 // Infinite sources (Repeat, unbounded From) hang non-short-circuiting terminal
 // operations such as ToSlice, Reduce, Count, Last, or Take without a cancellable
-// context — bound them with Limit or WithContext.
+// context — bound them with Limit or WithContext. Cancellation is cooperative
+// and checked at element boundaries: every terminal stops pulling once the
+// context is cancelled and returns promptly, with empty (or zero-value)
+// results when cancelled before iteration starts.
 package stream
