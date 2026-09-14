@@ -209,3 +209,34 @@ func TestCtx_CancelledSync(t *testing.T) {
 		t.Fatalf("cancelled ctx must not consume, got %d calls", calls)
 	}
 }
+
+func TestOps_SkipNonPositiveKeepsAll(t *testing.T) {
+	// "n <= 0 keeps everything" (export.go): a negative Skip must not inflate
+	// sizeHint — Count() and len(ToSlice()) must agree.
+	for _, n := range []int64{-5, -1, 0} {
+		if cnt := stream.SliceOf(1, 2, 3).Skip(n).Count(); cnt != 3 {
+			t.Errorf("Skip(%d).Count() = %d, want 3 (sizeHint inflated)", n, cnt)
+		}
+		if got := stream.SliceOf(1, 2, 3).Skip(n).ToSlice(); !slices.Equal(got, []int{1, 2, 3}) {
+			t.Errorf("Skip(%d).ToSlice() = %v, want [1 2 3]", n, got)
+		}
+	}
+	// unknown sizeHint path stays consistent too (Count falls back to iteration)
+	seq := func(yield func(int) bool) {
+		for i := 1; i <= 3; i++ {
+			if !yield(i) {
+				return
+			}
+		}
+	}
+	if cnt := stream.From(seq, -1).Skip(-1).Count(); cnt != 3 {
+		t.Errorf("From(3).Skip(-1).Count() = %d, want 3", cnt)
+	}
+	if got := stream.From(seq, -1).Skip(-1).ToSlice(); !slices.Equal(got, []int{1, 2, 3}) {
+		t.Errorf("From(3).Skip(-1).ToSlice() = %v, want [1 2 3]", got)
+	}
+	// Skip(n<0) after Skip(m): clamping keeps the hint arithmetic exact
+	if cnt := stream.SliceOf(1, 2, 3, 4).Skip(1).Skip(-2).Count(); cnt != 3 {
+		t.Errorf("Skip(1).Skip(-2).Count() = %d, want 3", cnt)
+	}
+}
