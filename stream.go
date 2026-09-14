@@ -677,14 +677,18 @@ func (s *streamer[T]) Execute() Streamer[T] {
 // Parallel implements Streamer.Parallel: n <= 0 is a no-op returning the
 // same stream; otherwise a mid-chain call closes the current parallel
 // section (if any) and opens a new one with n workers (unordered; follow
-// with Ordered() to preserve encounter order). Consecutive stateless ops
-// inside the section fuse into one pool (proposal
-// docs/proposals/parallel-v2.md).
+// with Ordered() to preserve encounter order). Each section runs on its own
+// pool sized by its own Parallel call; adjacent sections overlap because
+// the downstream section's feeder pulls the upstream section's output
+// lazily. Consecutive stateless ops inside the section fuse into one pool
+// (proposal docs/proposals/parallel-v2.md).
 func (s streamer[T]) Parallel(n int) Streamer[T] {
 	if n <= 0 {
 		return &s
 	}
-	s.ensureFlushed() // close current section if open (value receiver is addressable)
+	// Close the current section if one is open: adopt the flushed pipeline
+	// (the section's output becomes the new upstream) and drop fused stages.
+	s = *s.ensureFlushed()
 	s.parallelSize = n
 	s.ordered = false // new section starts unordered; Ordered() opts back in
 	return &s
