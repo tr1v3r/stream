@@ -27,7 +27,12 @@ import (
 type Streamer[T any] interface {
 	// WithContext sets the context consulted by later operations; a
 	// cancelled context makes intermediate operations stop pulling and
-	// terminals return promptly. Applies to the returned stream only.
+	// every terminal return promptly: collections and snapshots come back
+	// empty when cancelled up front, reductions keep their partial result.
+	// Cancellation is cooperative, checked at element boundaries (a source
+	// that never yields cannot be interrupted). Applies to the returned
+	// stream only: intermediate stages attached before the call keep the
+	// context they were built with.
 	WithContext(context.Context) Streamer[T]
 
 	// stateless operate
@@ -100,7 +105,8 @@ type Streamer[T any] interface {
 	// terminal operate
 
 	// ToSlice collects all elements into a new slice; hangs on infinite
-	// sources unless bounded or cancellable.
+	// sources unless bounded or cancellable (a cancelled context returns
+	// promptly: empty when cancelled up front).
 	ToSlice() []T
 	// Collect drains the stream into the caller-provided collector and
 	// returns its result (type any — assert it back).
@@ -137,11 +143,16 @@ type Streamer[T any] interface {
 	// Any is an alias for Take.
 	Any() T
 	// Last returns the final element or T's zero value; consumes the whole
-	// stream and hangs on infinite sources.
+	// stream and hangs on infinite sources unless the context is
+	// cancellable (a cancelled context returns promptly: zero value when
+	// cancelled up front).
 	Last() T
 	// Count returns the element count in O(1) when sizeHint is known,
-	// otherwise by full iteration.
+	// otherwise by full iteration (which honors cancellation: the count
+	// pulled so far once cancelled, 0 when cancelled up front). The O(1)
+	// fast path consumes nothing and does not consult the context.
 	Count() int64
-	// Seq returns the underlying iter.Seq[T] for native range loops.
+	// Seq returns the underlying iter.Seq[T] for native range loops;
+	// iteration stops pulling once the stream's context is cancelled.
 	Seq() iter.Seq[T]
 }

@@ -275,7 +275,7 @@ type Unique interface{ Key() string }             // Custom distinct key
 
 ## Important Notes
 
-- **Infinite streams hang non-short-circuiting terminals.** `ToSlice`, `ForEach`, `Reduce*`, `Count`, `Last`, and `Take`/`Any` (without a cancellable context) never finish on `Repeat` or an infinite `From` source. Bound them with `Limit` or `WithContext`:
+- **Infinite streams hang non-short-circuiting terminals.** `ToSlice`, `ForEach`, `Reduce*`, `Count`, `Last`, and `Take`/`Any` (without a cancellable context) never finish on `Repeat` or an infinite `From` source. Bound them with `Limit` or `WithContext` — cancellation is checked at element boundaries, so every terminal returns promptly once the context is cancelled (collections come back empty, reductions keep their partial result):
 
 ```go
 stream.Repeat(1).Limit(100).ToSlice() // bounded: ok
