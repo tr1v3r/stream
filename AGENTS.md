@@ -20,6 +20,10 @@ go test ./... -race   # recommended for anything touching Parallel()
 
 # Run linting (tests/ dir is excluded via .golangci.yml skip-dirs)
 golangci-lint run --config=.golangci.yml
+
+# Machine-independent performance gate (parallel-vs-serial ratios; CI runs
+# this as the "Benchmark gate" step — skips under -race and -short)
+go test -run 'TestBenchmarkGate' -v -count=1 .
 ```
 
 ## Architecture
@@ -97,5 +101,5 @@ When adding new stream operations:
 2. Implement in `streamer[T]` in `stream.go` (compose an `iter.Seq` closure; keep lazy)
 3. Update `sizeHint` propagation deliberately (see table above)
 4. For parallel support, accumulate into the fused section (`fused` + `thenFused`) and let `ensureFlushed`/`effectiveSeq` close it. Leak-freedom pattern (keep it): `flushFused`/`orderedSeq` derive a cancellable child ctx; the feeder has a single cancellation exit (top-of-loop check, plain blocking send — workers always drain `in`, discarding after cancel); the consumer drains `out` on any exit. Avoid select-with-Done on the feeder send: when both cases are ready Go picks randomly, which made coverage and exit paths nondeterministic.
-5. Add assertion-based tests: `factory_test.go` / `ops_test.go` / `terminal_test.go` / `parallel_test.go` / `branch_test.go` hold the suite (statement coverage 100%); parallel results must be compared as sorted multisets (order is not preserved). `TestParallel_ShortCircuitNoLeak` and `TestParallel_ConcurrentTakeNoRace` guard the concurrency fixes — always run `-race` before shipping parallel changes. `branch_test.go` covers defensive branches (mid-stream cancellation, downstream short-circuit per op, Pick materialize path, foreign Streamer fallback) — extend it when adding new branches.
+5. Add assertion-based tests: `factory_test.go` / `ops_test.go` / `terminal_test.go` / `parallel_test.go` / `branch_test.go` hold the suite (statement coverage 100%); parallel results must be compared as sorted multisets (order is not preserved). `TestParallel_ShortCircuitNoLeak` and `TestParallel_ConcurrentTakeNoRace` guard the concurrency fixes — always run `-race` before shipping parallel changes. `branch_test.go` covers defensive branches (mid-stream cancellation, downstream short-circuit per op, Pick materialize path, foreign Streamer fallback) — extend it when adding new branches. `benchmark_gate_test.go` is the CI performance gate: parallel-vs-serial ratio thresholds (G1 unordered <=4x, G2 ordered <=6x, G3 heavy speedup >=1.5x) that are machine-independent by construction; if a gate fails on real regressions do not loosen the threshold without a proposal-level justification.
 6. Update `README.md` and `doc.go` documentation

@@ -19,3 +19,6 @@
 
 # Go workspace file
 go.work
+
+# AgentTeams plugin runtime state (teams, mailboxes, archives)
+.agent-teams/
