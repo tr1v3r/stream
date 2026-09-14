@@ -371,3 +371,21 @@ func TestParallelV2_MidChainShortCircuitNoLeak(t *testing.T) {
 		t.Fatalf("goroutine leak across chained sections: before=%d after=%d", before, n)
 	}
 }
+
+// M1 regression: Ordered() before Parallel() applies to the section that
+// Parallel opens — export.go: "the current (or next) parallel section".
+func TestParallelV2_OrderedBeforeParallel(t *testing.T) {
+	const n = 600
+	src := make([]int, n)
+	for i := range src {
+		src[i] = i
+	}
+	jitter := func(v int) int {
+		time.Sleep(time.Duration(n-v) * 60 * time.Microsecond)
+		return v
+	}
+	got := stream.SliceOf(src...).Ordered().Parallel(4).Map(jitter).ToSlice()
+	if !slices.Equal(got, src) {
+		t.Fatalf("Ordered() before Parallel(): output must reproduce encounter order")
+	}
+}
