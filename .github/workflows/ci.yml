@@ -44,6 +44,12 @@ jobs:
       - name: Report coverage
         run: go tool cover -func=coverage.out | tail -1
 
+      # Machine-independent performance regression gate: ratios of parallel
+      # vs serial in the same process (docs/proposals/parallel-v2.md A1/A2).
+      # Runs plain (not -race) — see gate_race_test.go.
+      - name: Benchmark gate
+        run: go test -run 'TestBenchmarkGate' -v -count=1 .
+
   lint:
     name: golangci-lint
     runs-on: ubuntu-latest
