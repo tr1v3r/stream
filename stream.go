@@ -579,6 +579,9 @@ func (s *streamer[T]) Limit(l int64) Streamer[T] {
 
 // Skip implements Streamer.Skip; discards the first n elements before yielding. A parallel section closes first.
 func (s *streamer[T]) Skip(n int64) Streamer[T] {
+	if n < 0 {
+		n = 0 // "n <= 0 keeps everything" (export.go): clamp so sizeHint is not inflated
+	}
 	prev := s.ensureFlushed().seq
 	newHint := int64(-1)
 	if s.sizeHint >= 0 {
