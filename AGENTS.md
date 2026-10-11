@@ -8,6 +8,19 @@ This file provides guidance for AI coding agents (Claude Code, Codex, etc.) work
 
 Go stream processing library (`github.com/tr1v3r/stream`) providing Java Streams-like functionality. Core pipeline representation is `iter.Seq[T]`, enabling true lazy evaluation with short-circuit support. Zero external dependencies; `go.sum` is empty. `go.mod` declares `go 1.26.0`.
 
+## Component knowledge index
+
+- Root package (stream): before touching pipeline/parallel/cancellation logic, read
+  `knowledge/FLOW.md` (ctx coverage table, sizeHint propagation, parallel-section
+  boundaries and materialization points). Constraints and design rationale live in
+  `knowledge/DECISIONS.md` (incl. parallel v2 section fusion, Ordered() re-sequencing,
+  machine-independent benchmark gates). Evolution and release-line pitfalls (v0.1.0
+  lacks the leak fix and ivy still pins it; 8 commits after v0.3.0 are untagged) are
+  in `knowledge/HISTORY.md`.
+  Known-open items (Append ctx blind spot, tagging strategy) are in `knowledge/TODO.md`
+  (background, not an authorization list). After behavior changes, regress against
+  `knowledge/SCENARIOS.md` (cases carry 2026-10-12 measured baselines at 1d05225).
+
 ## Development Commands
 
 ```bash
