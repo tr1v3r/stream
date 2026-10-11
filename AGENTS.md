@@ -15,7 +15,8 @@ Go stream processing library (`github.com/tr1v3r/stream`) providing Java Streams
   boundaries and materialization points). Constraints and design rationale live in
   `knowledge/DECISIONS.md` (incl. parallel v2 section fusion, Ordered() re-sequencing,
   machine-independent benchmark gates). Evolution and release-line pitfalls (v0.1.0
-  lacks the leak fix; 25 untagged commits on master) are in `knowledge/HISTORY.md`.
+  lacks the leak fix and ivy still pins it; 8 commits after v0.3.0 are untagged) are
+  in `knowledge/HISTORY.md`.
   Known-open items (Append ctx blind spot, tagging strategy) are in `knowledge/TODO.md`
   (background, not an authorization list). After behavior changes, regress against
   `knowledge/SCENARIOS.md` (cases carry 2026-10-12 measured baselines at 1d05225).

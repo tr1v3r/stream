@@ -2,7 +2,7 @@
 
 组件：`github.com/tr1v3r/stream` 根包
 更新：2026-10-12（覆盖基线 9735b20 → 1d05225 的 25 个提交）。证据分级：A=PR/commit/文档明写；B=维护者口述；C=推测（待确认）。提交号可 `git show <hash>` 回查。
-发布线：v0.0.1=f6dbc2e（2023-10-07）、v0.0.2=2c0681c（2023-10-10）、v0.0.3=1054737（2025-11-01）、v0.1.0=53b194e（2026-04-21）。⚠ 此后至 1d05225 共 25 提交**均未打 tag**；proposal 建议 v2 语义随 v0.3.0 发布（见 T-007）。
+发布线（2026-10-12 经 `git ls-remote --tags` 核实）：v0.0.1=f6dbc2e（2023-10-07）、v0.0.2=2c0681c（2023-10-10）、v0.0.3=1054737（2025-11-01）、v0.1.0=53b194e（2026-04-21）、v0.2.0=3ac3fcc、v0.3.0=d85303a（含 parallel v2 三阶段，段语义已随其发布）。⚠ 本地旧 clone 曾 fetch 不到 v0.2.0/v0.3.0——核对 tag 一律用 ls-remote，勿信本地引用。v0.3.0 之后 master 尚有 8 个提交（#18~#21 行为修复 + 文档两笔 + #27/#28 CI 门禁）未打 tag（见 T-007）。
 
 ## H-001：iterator 时代的地基（2023-09-18 ~ 2023-10-07）
 
@@ -51,7 +51,7 @@
 ## H-008：parallel v2——段融合重写（2026-08-24，#14 提案 → #15 → #16 → #17）★ 方向性变化
 
 变化：v1「每 op 一池」（parallelSeq）近零负载开销实测 14-21× 串行（proposal §1 测量表）；23b3a79 提案（评审否决 fusion-only、保留按段定规模+段间流水线并行）→ a3f6499 段融合/单池/64 批（dead parallelSeq 删除，A1 门 14-21×→1-2.6×）→ 745ef5a Ordered() 批对齐重排（naive next-index/smallest-pending/ring slots 三结构被实测否决，设计旅程记于 commit）→ d85303a 文档收口（README/doc.go/AGENTS.md 重写为段语义，proposal 状态翻 Implemented）。
-当前影响：并行语义从「invisible rolling range」变「显式段」（兼容性注记：老代码 `.Parallel(4).Filter(f)` 行为不变，多 op 链融合——提案建议 v0.3.0 发布）；修并行代码前必读 proposal。
+当前影响：并行语义从「invisible rolling range」变「显式段」（兼容性注记：老代码 `.Parallel(4).Filter(f)` 行为不变，多 op 链融合——段语义已随 v0.3.0=d85303a 发布，其后的行为修复 #18~#21 仍在未打 tag 区间）；修并行代码前必读 proposal。
 关联：23b3a79、a3f6499、745ef5a、d85303a。
 
 ## H-009：并行硬化修复批（2026-08-23，43e328d + 77d6ab0/#4）——旧 T-001/T-002/T-003/T-005 在此了结

@@ -7,7 +7,7 @@
 
 - 职责：Java Streams 风格的 Go 流式管线 SDK；`iter.Seq[T]` 骨架，惰性中间操作 + 短路终结 + 段式并行 fan-out + 协作式 ctx 取消。
 - 入口：工厂（factory.go：`SliceOf`/`From`/`From2`/`Repeat`/`RepeatN`/`Concat`）与 `Streamer[T]` 接口（export.go）。
-- 上下游：零第三方依赖（go.mod 仅标准库，要求 **Go 1.26**，f1e12f6）；已核实消费方：ivy（锁 v0.0.1，仅用 SliceOf）、skr（锁 9735b20 伪版本）（2026-10-12 复查两者 go.mod）。
+- 上下游：零第三方依赖（go.mod 仅标准库，要求 **Go 1.26**，f1e12f6）；已核实消费方（2026-10-12，读各自 origin/master 的 go.mod）：ivy 锁 **v0.1.0**——恰是携带并行取消泄漏的 tag（见 HISTORY H-005），其 dependabot #93 已给出升 v0.3.0 的 PR；skr 锁 9735b20 伪版本。
 - 权威行为文档（A 级证据来源，本目录只索引不重复）：AGENTS.md（9023424；CLAUDE.md 是它的软链）、ARCHITECTURE.md（b5042c2）、docs/proposals/parallel-v2.md（并行段语义权威参考）、export.go/doc.go godoc（ef9906e 全符号覆盖）。
 
 ## 管线生命周期（主路径 / 异常路径）
