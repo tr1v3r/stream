@@ -1,6 +1,6 @@
 # ARCHITECTURE — github.com/tr1v3r/stream
 
-> 一句话定位：基于 Go 1.26 `iter.Seq[T]` 的零依赖惰性流式计算 SDK，提供 Java Streams 风格的类型安全组合子，以及"段作用域"（section-scoped）的融合式并行执行模型。
+> 一句话定位：基于 Go 1.27 `iter.Seq[T]` 的零依赖惰性流式计算 SDK，提供 Java Streams 风格的类型安全组合子，以及"段作用域"（section-scoped）的融合式并行执行模型。
 >
 > 本文面向维护者与下游（skr / ivy）使用者；用法示例见 README.md，包级 godoc 见 doc.go，并行语义的权威参考是 docs/proposals/parallel-v2.md。
 
@@ -13,6 +13,7 @@
 
 | 文件 | 职责 |
 |---|---|
+| `pipeline.go` | 公开具体类型 Pipeline、泛型方法与新旧 API 适配 |
 | `export.go` | `Streamer[T]` 接口（公开 API 契约） |
 | `stream.go` | `streamer[T]` 实现：带执行 context 的惰性闭包组合、并行段执行器 |
 | `factory.go` | 工厂函数 |
@@ -22,16 +23,22 @@
 | `tests/` | 练习场（lint 排除） |
 | `docs/proposals/parallel-v2.md` | 并行 v2 设计提案（权威语义参考） |
 
-`go.mod` 仅声明 `go 1.26.0`，无任何依赖（`go.sum` 为空）。
+`go.mod` 仅声明 `go 1.27.0`，无任何依赖（`go.sum` 为空）。
 
 ## 2. 公开 API 面
 
 ### 2.1 核心类型
 
-- **`Streamer[T any]`**（export.go）：唯一核心接口，由不可导出的 `streamer[T]` 实现（`var _ Streamer[any] = newStreamer[any](nil, 0)` 编译期断言）。流是**单次使用**的：终结操作消费底层 `iter.Seq`。
+- **`Streamer[T any]`**（export.go）：保留兼容的核心接口，由不可导出的 `streamer[T]` 实现（`var _ Streamer[any] = newStreamer[any](nil, 0)` 编译期断言）。流是**单次使用**的：终结操作消费底层 `iter.Seq`。
 - **`types` 包**（types/type.go）：全部是函数类型——`Judge[T] func(T) bool`、`Mapper[T] func(T) T`、`Converter[T,R] func(T) R`、`Comparator[T]`、`Consumer[T]`、`BinaryOperator[T]`、`Accumulator[T,R]`、`Collector[T] func(...T) any`，以及 `Unique interface{ Key() string }`（自定义去重键）。
 
-### 2.2 工厂函数（factory.go）
+### 2.2 具体类型与兼容边界
+
+`Pipeline[T]` 通过 `Of` 创建，或通过 `Wrap(Streamer[T])` 从旧接口接入；`.Stream()` 返回旧接口。所有中间方法返回具体类型，因此 MapTo、FlatMapTo、DistinctBy 可以持续链式调用；Fold、CollectTo 保留累积器和结果类型。同类型 Map 继续走原有融合执行器。
+
+Pipeline 不实现 Streamer，因为 Go 不支持返回类型协变或泛型接口方法。旧接口、工厂、包级泛型函数和 callback 类型签名不变，但最低编译器升级为 Go 1.27。新类型零值为空，适配共享源而不复制或消费源。类型变化仍是串行段边界；新 MapTo/FlatMapTo 保留 ctx、parallelSize、ordered。FlatMapTo 使用执行取消 context 连接父源和子源。详见 [泛型 API 方案及基准](docs/proposals/generic-api.md)。
+
+### 2.3 工厂函数（factory.go）
 
 | 函数 | 说明 |
 |---|---|
@@ -44,7 +51,7 @@
 ### 2.3 中间算子（惰性，返回新流）
 
 - **无状态**：`Filter(Judge)`、`Map(Mapper)`（同类型）、`Peek(Consumer)`（旁路副作用）、`Convert`（Deprecated，产出 `Streamer[any]`）、`FlatMap`（子流拼接，产出 `Streamer[any]`）。
-- **包级泛型**（Go 方法不能新增类型参数，故为函数）：`MapTo[T,R](s, Converter) Streamer[R]` —— `Convert` 的类型安全替代；`DistinctBy[T,K comparable](s, key)` —— 精确键去重（`Distinct` 用 `fmt.Sprint` 键，`1` 与 `"1"` 碰撞）。
+- **包级泛型**（保留原有函数签名；Go 1.27 的具体类型另提供泛型方法）：`MapTo[T,R](s, Converter) Streamer[R]` —— `Convert` 的类型安全替代；`DistinctBy[T,K comparable](s, key)` —— 精确键去重（`Distinct` 用 `fmt.Sprint` 键，`1` 与 `"1"` 碰撞）。
 - **有状态**：`Distinct`、`Sort` / `ReverseSort`（`slices.SortFunc`，pdqsort）、`Reverse`、`Limit` / `Skip`、`Pick(start, end, interval)`（绝对索引步进采样，end<0 表示末元素）。
 - **其他**：`Append(...T)`、`Execute()`（立即物化为可重迭代快照，保留 ctx 与 parallelSize）。
 - **并发控制**：`WithContext(ctx)`、`Parallel(n)`、`Ordered()`。
@@ -159,7 +166,7 @@ Ordered feeder 在拉取每批前申请 credit，总计 n 个；消费端按序�
 
 - **vs `slices`/`maps`/`iter`（标准库）**：标准库是即时求值的零散函数；本库在其上提供**可组合的惰性管道 + 声明式并行**（`slices.Values`、`slices.SortFunc` 被内部复用，`Seq()`/`From`/`From2` 双向互操作）。
 - **vs 社区流库（如 Java Streams、各 Go stream 克隆）**：语义对标 Java Streams（组合子集合几乎一一对应，`doc.go`/README 均自述 "Java Streams-like"），但并行模型不同——Java 的 `.parallel()` 是全局 ForkJoinPool 开关，本库是**段作用域 + 显式 `n` + 可选保序**，且 v2 融合设计针对"轻负载下并行反而更慢（14–21×）"这一实测问题。仓库自身未对标引用任何具体第三方流库。
-- **零依赖 + Go 1.26 `iter` 原生**：不引 channel-free 以外的并发框架（拒绝 `errgroup` 外部组合——那正是本库存在的理由，提案 §8）。
+- **零依赖 + Go 1.27 `iter` 原生**：不引 channel-free 以外的并发框架（拒绝 `errgroup` 外部组合——那正是本库存在的理由，提案 §8）。
 
 ## 6. 下游真实使用（skr / ivy）
 
@@ -182,6 +189,6 @@ Ordered feeder 在拉取每批前申请 credit，总计 n 个；消费端按序�
 
 ## 9. 扩展新算子的约定
 
-1. 在 `export.go` 的 `Streamer` 接口加方法；2. 在 `stream.go` 组合 `iter.Seq` 闭包保持惰性；3. 显式决定 sizeHint 传播；4. 需要并行时累积进 `fused`（`thenFused`），靠 `ensureFlushed`/`effectiveSeq` 关段，并保持 cancel/drain 模式（feeder 单一取消出口、纯阻塞发送；worker 取消后 drain；消费端退出时排干 out）；
+1. 新泛型方法加在 `pipeline.go` 的 Pipeline 上，保持旧 Streamer 接口与工厂签名；2. 在 `stream.go` 组合 `iter.Seq` 闭包保持惰性；3. 显式决定 sizeHint 传播；4. 需要并行时累积进 `fused`（`thenFused`），靠 `ensureFlushed`/`effectiveSeq` 关段，并保持 cancel/drain 模式（feeder 单一取消出口、纯阻塞发送；worker 取消后 drain；消费端退出时排干 out）；
 5. 补 `*_test.go` 断言（并行结果按排序多重集比较，顺序不保证），涉及并行的改动必须跑 `-race`；
 6. 更新 README 与 doc.go，保持三者语义一致（README 的用法示例、doc.go 的 godoc 分节、本文件的架构叙述）。

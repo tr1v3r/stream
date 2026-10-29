@@ -6,7 +6,7 @@ This file provides guidance for AI coding agents (Claude Code, Codex, etc.) work
 
 ## Project Overview
 
-Go stream processing library (`github.com/tr1v3r/stream`) providing Java Streams-like functionality. Public iteration uses `iter.Seq[T]`; internal `pipelineSeq[T]` closures carry execution cancellation upstream while retaining lazy evaluation and short-circuit support. Zero external dependencies; `go.sum` is empty. `go.mod` declares `go 1.26.0`.
+Go stream processing library (`github.com/tr1v3r/stream`) providing Java Streams-like functionality. Public iteration uses `iter.Seq[T]`; internal `pipelineSeq[T]` closures carry execution cancellation upstream while retaining lazy evaluation and short-circuit support. Zero external dependencies; `go.sum` is empty. `go.mod` declares `go 1.27.0`.
 
 ## Development Commands
 
@@ -30,7 +30,9 @@ go test -run 'TestBenchmarkGate' -v -count=1 .
 
 ### Core Components
 
-1. **Streamer Interface** (`export.go`): Main interface defining stream operations
+1. **Concrete API** (`pipeline.go`): `Pipeline[T]`, `Of`, and `Wrap`; `.Stream()` bridges to the legacy interface. Generic methods: `MapTo[R]`, `FlatMapTo[R]`, `DistinctBy[K]`, `Fold[R]`, `CollectTo[R]`. The zero value is empty. All intermediate methods return Pipeline; same-type Map keeps fused execution. Typed MapTo/FlatMapTo preserve context, worker count, and Ordered preference across type boundaries. Pipeline is not a Streamer (return types are not covariant).
+
+2. **Streamer Interface** (`export.go`): Main interface defining stream operations
    - Stateless operations: `Filter`, `Map`, `Convert`, `Peek`, `FlatMap`
    - Stateful operations: `Distinct`, `Sort`, `ReverseSort`, `Reverse`, `Limit`, `Skip`, `Pick`
    - Terminal operations: `ToSlice`, `Collect`, `ForEach`, `Reduce`, `Count`, `Seq`
@@ -38,7 +40,7 @@ go test -run 'TestBenchmarkGate' -v -count=1 .
    - Element operations: `First`, `Take`, `Any`, `Last`
    - Reduce variants: `Reduce`, `ReduceFrom`, `ReduceWith`, `ReduceBy`
 
-2. **Stream Implementation** (`stream.go`): Core `streamer[T]` struct
+3. **Stream Implementation** (`stream.go`): Core `streamer[T]` struct
    - Holds `pipelineSeq[T]` internally (`context.Context` + yield callback); public sources and terminals still expose `iter.Seq[T]`
    - `ctx context.Context` for cancellation (`WithContext` to set)
    - `sizeHint int64` for known-size optimizations (-1 for unknown)
@@ -48,9 +50,9 @@ go test -run 'TestBenchmarkGate' -v -count=1 .
    - Parallel sections: `fused func(T) (T, bool)` accumulates stateless stages; `flushFused` runs them on one worker pool (`fusedFeeder`/`fusedWorkers`, or `orderedFeeder`/`orderedWorkers`/`orderedYield` for `Ordered()`)
    - Sorting via `slices.SortFunc` (type-safe pdqsort, no sort.Interface adapter)
 
-3. **Factory Functions** (`factory.go`): `SliceOf`, `Repeat`, `RepeatN`, `Concat`, `From` (from `iter.Seq[T]`), `From2` (from `iter.Seq2[K,V]`, values only)
+4. **Factory Functions** (`factory.go`): `SliceOf`, `Repeat`, `RepeatN`, `Concat`, `From` (from `iter.Seq[T]`), `From2` (from `iter.Seq2[K,V]`, values only)
 
-4. **Helper Functions** (`helper.go`)
+5. **Helper Functions** (`helper.go`)
    - `To[T, R]`: Convert slice type with converter function
    - `AnyTo[T]`: Convert `[]any` to typed slice
    - Package-level generics in `stream.go`: `DistinctBy[T, K comparable]` (dedup by exact keys; `Distinct` delegates with `fmt.Sprint`/`types.Unique` keys) and `MapTo[T, R]` (type-safe transform; `Convert` delegates and is deprecated)
@@ -72,15 +74,15 @@ go test -run 'TestBenchmarkGate' -v -count=1 .
 - **Streams are single-use**: A terminal operation consumes the underlying `iter.Seq`. Create a new stream for each pipeline.
 - **Lazy evaluation**: Intermediate operations compose closures without executing. `Limit(1)` + `First()` on a million elements processes only 1 element.
 - **Distinct uses `fmt.Sprint`** for hashing by default (`1` and `"1"` collide). Implement `types.Unique` for custom hash keys, or prefer the generic `DistinctBy[T, K comparable]` for exact keys (also much faster: no boxing).
-- **`Convert` and `FlatMap` produce `Streamer[any]`**: Type info is lost; prefer the generic `stream.MapTo[T, R]` (Convert is deprecated and delegates to it). Trade-off: MapTo is a function, so it interrupts method chaining at the type-changing point — recommend it for head-of-pipeline type changes (chaining resumes below); Convert stays acceptable for mid-chain changes in throwaway code. For FlatMap, use `AnyTo[T]()` or `To[T, R]()` to convert back.
+- **Legacy `Convert` and `FlatMap` produce `Streamer[any]`** (new code can use `Of`/`Wrap` with Pipeline.MapTo/FlatMapTo): Type info is lost; prefer the generic `stream.MapTo[T, R]` (Convert is deprecated and delegates to it). Trade-off: MapTo is a function, so it interrupts method chaining at the type-changing point — recommend it for head-of-pipeline type changes (chaining resumes below); Convert stays acceptable for mid-chain changes in throwaway code. For FlatMap, use `AnyTo[T]()` or `To[T, R]()` to convert back.
 - **Parallel sections are unordered by default** (`Ordered()` opts into serial-order output; see docs/proposals/parallel-v2.md). Parallelism is section-scoped: `Parallel(n)` opens a fused section (single pool over Filter/Map/Peek chains, 64-element batches); sections close at stateful ops, type changes, terminals, and the next `Parallel` call. `Convert`/`FlatMap`/`Sort`/`Reverse`/`Distinct` therefore run serially after a section closes (Distinct is serial by design — shared key map).
 - **v1 per-op pools are gone**: sections fuse stateless ops into one pool (machinery overhead went from 14-21x to 1-2x serial on near-free workloads). The leak-freedom pattern lives in `flushFused`/`orderedSeq`; ordered re-sequencing is batch-keyed with hole placeholders — see the proposal's design-journey note before touching it.
 - **`Pick` with negative `end`** must materialize the entire stream to determine size.
 
 ### sizeHint Propagation
 
-- `Filter`, `Distinct`, `DistinctBy`, `FlatMap`, `Pick`: hint becomes -1
-- `Map`, `Peek`, `Convert`: hint preserved
+- `Filter`, `Distinct`, `DistinctBy`, `FlatMap`, `FlatMapTo`, `Pick`: hint becomes -1
+- `Map`, `MapTo`, `Peek`, `Convert`: hint preserved
 - `Limit(n)`: 0 for n <= 0; min(hint, n) if hint >= 0; otherwise unknown (-1)
 - `Skip(n)`: max(0, hint - n) if hint >= 0
 - `Sort`, `ReverseSort`, `Reverse`, `Append`: hint preserved / additive
@@ -97,9 +99,13 @@ go test -run 'TestBenchmarkGate' -v -count=1 .
 ## Common Development Tasks
 
 When adding new stream operations:
-1. Add method to `Streamer` interface in `export.go`
+1. Add new generic methods to Pipeline in `pipeline.go`; keep the legacy `Streamer` interface and factory signatures unchanged for source compatibility
 2. Implement in `streamer[T]` in `stream.go` (compose a `pipelineSeq` closure and forward its execution context; keep lazy)
 3. Update `sizeHint` propagation deliberately (see table above)
 4. For parallel support, accumulate into the fused section (`fused` + `thenFused`) and let `ensureFlushed`/`effectiveSeq` close it. Leak-freedom pattern (keep it): `flushFused`/`orderedSeq` derive a local cancellable ctx observing both the configured context and downstream execution context, and pass it upstream via `pipelineSeq`; feeders check cancellation before accepting values and use plain blocking worker-input sends — workers always drain `in`, discarding after cancel; the consumer drains `out` on any exit. Ordered feeders separately acquire a cancellable batch credit before pulling; the consumer returns it only after ordered delivery. Workers check cancellation per element. Avoid select-with-Done on the worker-input feeder send: when both cases are ready Go picks randomly, which made coverage and exit paths nondeterministic.
 5. Add assertion-based tests: `factory_test.go` / `ops_test.go` / `terminal_test.go` / `parallel_test.go` / `branch_test.go` hold the suite (statement coverage 100%); parallel results must be compared as sorted multisets (order is not preserved). `TestParallel_ShortCircuitNoLeak` and `TestParallel_ConcurrentTakeNoRace` guard the concurrency fixes — always run `-race` before shipping parallel changes. `branch_test.go` covers defensive branches (mid-stream cancellation, downstream short-circuit per op, Pick materialize path, foreign Streamer fallback) — extend it when adding new branches. `benchmark_gate_test.go` is the CI performance gate (G1-G7), machine-independent by construction: same-process ratios (G1 unordered <=6x, G2 ordered <=8x, G3 heavy speedup >=1.5x, G4 sort <=2.5x direct stdlib, G5 DistinctBy <=0.6x Distinct time and <=5% of its allocs) plus deterministic allocation gates (G6 Take <=50 allocs, G7 lazy Limit <=200 allocs on 100k). Thresholds are calibrated against measured healthy ranges on laptop and shared-CI hardware — see the calibration table in the file; if a gate fails on real regressions do not loosen the threshold without a proposal-level justification. Proposal A6 (multi-section speedup) is deliberately not a time gate: it is core-count dependent; its correctness is pinned by TestParallelV2_MidChainParallelReopens.
 6. Update `README.md` and `doc.go` documentation
+
+### Generic API validation
+
+`pipeline_test.go` covers concrete chaining, legacy signature compatibility, zero values, adapters, cancellation and ordered parallel boundaries. `pipeline_benchmark_test.go` compares the concrete API with package-level generics and legacy any-valued operations. Run `go test -run '^$' -bench '^BenchmarkGenericAPI$' -benchmem -count=5 .`; do not assume generic method syntax alone improves performance. See `docs/proposals/generic-api.md`. CI uses Go 1.27 and golangci-lint v2.15.0.

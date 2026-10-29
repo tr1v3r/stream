@@ -1,19 +1,19 @@
 # stream
 
 [![CI](https://github.com/tr1v3r/stream/actions/workflows/ci.yml/badge.svg)](https://github.com/tr1v3r/stream/actions/workflows/ci.yml)
-[![Go Version](https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go)](https://go.dev)
+[![Go Version](https://img.shields.io/badge/go-1.27%2B-00ADD8?logo=go)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 [![Go Reference](https://pkg.go.dev/badge/github.com/tr1v3r/stream.svg)](https://pkg.go.dev/github.com/tr1v3r/stream)
 
 A Go stream processing library that brings Java Streams-like functional operations to Go collections using generics and `iter.Seq`.
 
-Requires Go 1.26+ (see `go.mod`).
+Requires Go 1.27+ (see `go.mod`). Existing Streamer source code remains compatible; the minimum compiler version increases from Go 1.26.
 
 ## Features
 
 - **True lazy evaluation** — intermediate operations compose `iter.Seq[T]` closures; nothing runs until a terminal operation iterates
 - **Short-circuiting** — `First()`, `AnyMatch()`, `Limit()` stop processing as soon as the result is known
-- **Generics** — type-safe streams with `Streamer[T]`
+- **Generics** — fluent generic methods on `Pipeline[T]`, with the legacy `Streamer[T]` API retained
 - **iter.Seq integration** — `Seq()` method and `From`/`From2` factory functions for native `for range` interop
 - **Parallel processing** — concurrent execution via goroutine worker pools
 - **Functional pipelines** — filter, map, flatmap, reduce, sort, distinct, and more
@@ -44,6 +44,68 @@ func main() {
     fmt.Println(sum) // 35
 }
 ```
+
+## Concrete pipelines and generic methods
+
+Use `Of(...)` for a concrete `Pipeline[T]`. Type-changing operations remain in
+one fluent chain, with no `any` result or type assertion:
+
+```go
+names := stream.Of(1, 2, 2, 3).
+    Filter(func(n int) bool { return n > 1 }).
+    MapTo(strconv.Itoa).
+    DistinctBy(func(s string) string { return s }).
+    ToSlice() // []string{"2", "3"}
+
+text := stream.Of(1, 2).
+    FlatMapTo(func(n int) stream.Pipeline[string] {
+        return stream.Of(strconv.Itoa(n), "!")
+    }).
+    Fold("", func(result, item string) string { return result + item }) // "1!2!"
+
+count := stream.Of(1, 2, 3).
+    CollectTo(func(values ...int) int { return len(values) }) // int
+```
+
+| Generic method | Result | Execution |
+|---|---|---|
+| `MapTo[R](func(T) R)` | `Pipeline[R]` | Lazy serial type change; exact size preserved |
+| `FlatMapTo[R](func(T) Pipeline[R])` | `Pipeline[R]` | Lazy child concatenation; size unknown |
+| `DistinctBy[K comparable](func(T) K)` | `Pipeline[T]` | Serial exact-key deduplication |
+| `Fold[R](initial R, func(R, T) R)` | `R` | Incremental reduction; partial result on cancellation |
+| `CollectTo[R](func(...T) R)` | `R` | Materializes input, then calls the collector once |
+
+Type arguments are normally inferred. Every intermediate operation on Pipeline
+returns a concrete pipeline, including Filter, Map, Sort, Limit, Parallel, and
+Execute. Same-type `Map` retains fused parallel execution. MapTo and FlatMapTo
+close the current section, execute their type-changing work serially, and retain
+context, worker count, and Ordered preference for downstream operations. Children
+of FlatMapTo may have their own parallel sections.
+
+### Compatibility and migration
+
+Old factories (`SliceOf`, `From`, `RepeatN`, etc.), the `Streamer` interface,
+package-level `MapTo` / `DistinctBy`, and callback types keep their signatures.
+Use `Wrap` to enter the concrete API and `.Stream()` to return to an existing
+interface-based call site:
+
+```go
+legacy := stream.RepeatN(3, 2)
+typed := stream.Wrap(legacy).MapTo(strconv.Itoa)
+var compatible stream.Streamer[string] = typed.Stream()
+```
+
+Pipeline does **not** implement Streamer: Go has neither covariant method return
+types nor generic interface methods. Both APIs share the same execution engine.
+Wrapping native streams preserves their options; foreign Streamer implementations
+are adapted through Seq, with unknown size and serial downstream defaults.
+Adapters do not copy or consume the source, so they do not enable multiple terminal
+operations on a single-use stream. A zero-value Pipeline is empty; Execute remains
+the explicit re-iterable snapshot operation.
+
+The legacy operation tables below still describe Streamer. Pipeline exposes the
+same operations with concrete intermediate results, plus the five methods above.
+See [design and performance comparison](docs/proposals/generic-api.md).
 
 ## Stream Creation
 
@@ -81,7 +143,7 @@ All intermediate operations are lazy — they compose closures without processin
 | `Peek` | `(Consumer[T]) Streamer[T]` | Apply an action without modifying elements |
 | `FlatMap` | `(func(T) Streamer[any]) Streamer[any]` | Flatten each element to a sub-stream |
 
-Package-level generic (methods cannot add type parameters): `stream.MapTo[T, R](s, func(T) R) Streamer[R]` — the type-safe replacement for `Convert`.
+Package-level generic (interface methods cannot add type parameters): `stream.MapTo[T, R](s, func(T) R) Streamer[R]` — the type-safe replacement for `Convert`.
 
 ### When to use MapTo vs Convert
 
@@ -93,10 +155,11 @@ names := stream.MapTo(stream.SliceOf(1, 2, 3), func(n int) string {
     return fmt.Sprintf("#%d", n)
 })
 
-// Head-of-pipeline type change: MapTo costs nothing — chain continues below it
-stream.MapTo(stream.SliceOf(employees...), func(e *Employee) Dept { return e.Dept }).
-    Filter(func(d Dept) bool { return d.Active }).  // normal chaining resumes
-    Map(func(d Dept) string { return d.Name })
+// Existing Streamer code can adopt the concrete API at any point
+stream.Wrap(stream.SliceOf(1, 2, 3)).
+    Filter(func(n int) bool { return n > 1 }).
+    MapTo(strconv.Itoa).
+    ToSlice() // []string{"2", "3"}
 
 // Mid-pipeline type change in a long chain: Convert keeps it readable,
 // at the cost of any + a runtime assertion to come back
@@ -107,7 +170,7 @@ stream.SliceOf(1, 2, 3, 4).
     Collect(stream.AnyTo[float64]()).([]float64)     // runtime type assertion
 ```
 
-Rule of thumb: prefer `MapTo` (type change at the pipeline head, or safety matters more than fluency); `Convert` remains valid for mid-chain type changes in throwaway code — it is deprecated, not removed, and still works. When Go ships generic methods, a `Map[R](func(T) R) Streamer[R]` method can offer both.
+Rule of thumb: prefer `MapTo` (type change at the pipeline head, or safety matters more than fluency); `Convert` remains valid for mid-chain type changes in throwaway code — it is deprecated, not removed, and still works. On the concrete Pipeline API, use the generic `MapTo` method for both type safety and fluent chaining.
 
 ```go
 stream.SliceOf(1, 2, 3, 4).
