@@ -1,0 +1,104 @@
+# Go 1.27.1, Apple M3 Pro, darwin/arm64, GOMAXPROCS default (12)
+# 4096 input elements per operation, same compiler and source revision for both APIs.
+# go test -run '^$' -bench '^BenchmarkGenericAPI$' -benchmem -benchtime=200ms -count=5 .
+
+goos: darwin
+goarch: arm64
+pkg: github.com/tr1v3r/stream
+cpu: Apple M3 Pro
+BenchmarkGenericAPI/SameType/Legacy-12         	    8390	     28274 ns/op	     664 B/op	      15 allocs/op
+BenchmarkGenericAPI/SameType/Legacy-12         	    8943	     27492 ns/op	     664 B/op	      15 allocs/op
+BenchmarkGenericAPI/SameType/Legacy-12         	    8330	     28023 ns/op	     664 B/op	      15 allocs/op
+BenchmarkGenericAPI/SameType/Legacy-12         	    8635	     28057 ns/op	     664 B/op	      15 allocs/op
+BenchmarkGenericAPI/SameType/Legacy-12         	    8738	     28054 ns/op	     664 B/op	      15 allocs/op
+BenchmarkGenericAPI/SameType/Pipeline-12       	    8548	     28185 ns/op	     664 B/op	      15 allocs/op
+BenchmarkGenericAPI/SameType/Pipeline-12       	    8288	     28101 ns/op	     664 B/op	      15 allocs/op
+BenchmarkGenericAPI/SameType/Pipeline-12       	    8776	     27712 ns/op	     664 B/op	      15 allocs/op
+BenchmarkGenericAPI/SameType/Pipeline-12       	    8848	     27430 ns/op	     664 B/op	      15 allocs/op
+BenchmarkGenericAPI/SameType/Pipeline-12       	    8773	     27487 ns/op	     664 B/op	      15 allocs/op
+BenchmarkGenericAPI/Parallel/Legacy-12         	    2065	    110583 ns/op	  200575 B/op	     173 allocs/op
+BenchmarkGenericAPI/Parallel/Legacy-12         	    2187	    110621 ns/op	  200485 B/op	     173 allocs/op
+BenchmarkGenericAPI/Parallel/Legacy-12         	    2125	    112506 ns/op	  200496 B/op	     173 allocs/op
+BenchmarkGenericAPI/Parallel/Legacy-12         	    2150	    112631 ns/op	  200478 B/op	     173 allocs/op
+BenchmarkGenericAPI/Parallel/Legacy-12         	    2149	    112584 ns/op	  200472 B/op	     173 allocs/op
+BenchmarkGenericAPI/Parallel/Pipeline-12       	    2110	    135157 ns/op	  200419 B/op	     172 allocs/op
+BenchmarkGenericAPI/Parallel/Pipeline-12       	    2049	    146240 ns/op	  200407 B/op	     172 allocs/op
+BenchmarkGenericAPI/Parallel/Pipeline-12       	    2106	    113316 ns/op	  200416 B/op	     172 allocs/op
+BenchmarkGenericAPI/Parallel/Pipeline-12       	    2172	    128089 ns/op	  200416 B/op	     172 allocs/op
+BenchmarkGenericAPI/Parallel/Pipeline-12       	    2150	    120821 ns/op	  200418 B/op	     172 allocs/op
+BenchmarkGenericAPI/MapTo/Package-12           	    5869	     37794 ns/op	  128248 B/op	      22 allocs/op
+BenchmarkGenericAPI/MapTo/Package-12           	    7023	     36260 ns/op	  128248 B/op	      22 allocs/op
+BenchmarkGenericAPI/MapTo/Package-12           	    6926	     35335 ns/op	  128248 B/op	      22 allocs/op
+BenchmarkGenericAPI/MapTo/Package-12           	    6644	     35552 ns/op	  128248 B/op	      22 allocs/op
+BenchmarkGenericAPI/MapTo/Package-12           	    7116	     35115 ns/op	  128248 B/op	      22 allocs/op
+BenchmarkGenericAPI/MapTo/Method-12            	    6916	     35869 ns/op	  128248 B/op	      22 allocs/op
+BenchmarkGenericAPI/MapTo/Method-12            	    6967	     36021 ns/op	  128248 B/op	      22 allocs/op
+BenchmarkGenericAPI/MapTo/Method-12            	    6506	     35590 ns/op	  128248 B/op	      22 allocs/op
+BenchmarkGenericAPI/MapTo/Method-12            	    6622	     35149 ns/op	  128248 B/op	      22 allocs/op
+BenchmarkGenericAPI/MapTo/Method-12            	    6946	     35780 ns/op	  128248 B/op	      22 allocs/op
+BenchmarkGenericAPI/MapTo/Erased-12            	    2989	     77877 ns/op	  305081 B/op	    4121 allocs/op
+BenchmarkGenericAPI/MapTo/Erased-12            	    3108	     77132 ns/op	  305081 B/op	    4121 allocs/op
+BenchmarkGenericAPI/MapTo/Erased-12            	    3148	     79505 ns/op	  305081 B/op	    4121 allocs/op
+BenchmarkGenericAPI/MapTo/Erased-12            	    3022	     76338 ns/op	  305081 B/op	    4121 allocs/op
+BenchmarkGenericAPI/MapTo/Erased-12            	    3175	     75375 ns/op	  305082 B/op	    4121 allocs/op
+BenchmarkGenericAPI/FlatMap/Typed-12           	     554	    436613 ns/op	 1570300 B/op	   36893 allocs/op
+BenchmarkGenericAPI/FlatMap/Typed-12           	     559	    438748 ns/op	 1570304 B/op	   36893 allocs/op
+BenchmarkGenericAPI/FlatMap/Typed-12           	     556	    462131 ns/op	 1570300 B/op	   36893 allocs/op
+BenchmarkGenericAPI/FlatMap/Typed-12           	     462	    526107 ns/op	 1570300 B/op	   36893 allocs/op
+BenchmarkGenericAPI/FlatMap/Typed-12           	     540	    437669 ns/op	 1570302 B/op	   36893 allocs/op
+BenchmarkGenericAPI/FlatMap/Erased-12          	     471	    512542 ns/op	 1927129 B/op	   45083 allocs/op
+BenchmarkGenericAPI/FlatMap/Erased-12          	     469	    527581 ns/op	 1927129 B/op	   45083 allocs/op
+BenchmarkGenericAPI/FlatMap/Erased-12          	     433	    729996 ns/op	 1927128 B/op	   45083 allocs/op
+BenchmarkGenericAPI/FlatMap/Erased-12          	     364	    587852 ns/op	 1927129 B/op	   45083 allocs/op
+BenchmarkGenericAPI/FlatMap/Erased-12          	     453	    526993 ns/op	 1927132 B/op	   45083 allocs/op
+BenchmarkGenericAPI/Fold/Typed-12              	   12642	     18992 ns/op	     280 B/op	       7 allocs/op
+BenchmarkGenericAPI/Fold/Typed-12              	   12668	     18973 ns/op	     280 B/op	       7 allocs/op
+BenchmarkGenericAPI/Fold/Typed-12              	   12693	     18911 ns/op	     280 B/op	       7 allocs/op
+BenchmarkGenericAPI/Fold/Typed-12              	   12638	     18964 ns/op	     280 B/op	       7 allocs/op
+BenchmarkGenericAPI/Fold/Typed-12              	   12676	     18966 ns/op	     280 B/op	       7 allocs/op
+BenchmarkGenericAPI/Fold/Erased-12             	    5680	     42348 ns/op	   33064 B/op	    4104 allocs/op
+BenchmarkGenericAPI/Fold/Erased-12             	    5630	     42354 ns/op	   33064 B/op	    4104 allocs/op
+BenchmarkGenericAPI/Fold/Erased-12             	    5397	     41748 ns/op	   33064 B/op	    4104 allocs/op
+BenchmarkGenericAPI/Fold/Erased-12             	    5786	     41624 ns/op	   33064 B/op	    4104 allocs/op
+BenchmarkGenericAPI/Fold/Erased-12             	    5796	     42046 ns/op	   33064 B/op	    4104 allocs/op
+BenchmarkGenericAPI/Collect/Typed-12           	    8338	     30316 ns/op	  160824 B/op	      19 allocs/op
+BenchmarkGenericAPI/Collect/Typed-12           	    8326	     29455 ns/op	  160824 B/op	      19 allocs/op
+BenchmarkGenericAPI/Collect/Typed-12           	    8130	     29424 ns/op	  160824 B/op	      19 allocs/op
+BenchmarkGenericAPI/Collect/Typed-12           	    8599	     29505 ns/op	  160824 B/op	      19 allocs/op
+BenchmarkGenericAPI/Collect/Typed-12           	    8384	     29368 ns/op	  160824 B/op	      19 allocs/op
+BenchmarkGenericAPI/Collect/Erased-12          	    8300	     29315 ns/op	  160864 B/op	      21 allocs/op
+BenchmarkGenericAPI/Collect/Erased-12          	    8140	     30124 ns/op	  160864 B/op	      21 allocs/op
+BenchmarkGenericAPI/Collect/Erased-12          	    7708	     30060 ns/op	  160864 B/op	      21 allocs/op
+BenchmarkGenericAPI/Collect/Erased-12          	    8205	     29695 ns/op	  160864 B/op	      21 allocs/op
+BenchmarkGenericAPI/Collect/Erased-12          	    8116	     30274 ns/op	  160864 B/op	      21 allocs/op
+BenchmarkGenericAPI/DistinctBy/Package-12      	    6454	     37983 ns/op	   10048 B/op	      26 allocs/op
+BenchmarkGenericAPI/DistinctBy/Package-12      	    6460	     37687 ns/op	   10048 B/op	      26 allocs/op
+BenchmarkGenericAPI/DistinctBy/Package-12      	    6523	     38048 ns/op	   10048 B/op	      26 allocs/op
+BenchmarkGenericAPI/DistinctBy/Package-12      	    6254	     38229 ns/op	   10048 B/op	      26 allocs/op
+BenchmarkGenericAPI/DistinctBy/Package-12      	    6289	     45566 ns/op	   10048 B/op	      26 allocs/op
+BenchmarkGenericAPI/DistinctBy/Method-12       	    6361	     38093 ns/op	   10048 B/op	      26 allocs/op
+BenchmarkGenericAPI/DistinctBy/Method-12       	    6298	     39064 ns/op	   10048 B/op	      26 allocs/op
+BenchmarkGenericAPI/DistinctBy/Method-12       	    6409	     38039 ns/op	   10048 B/op	      26 allocs/op
+BenchmarkGenericAPI/DistinctBy/Method-12       	    6500	     38231 ns/op	   10048 B/op	      26 allocs/op
+BenchmarkGenericAPI/DistinctBy/Method-12       	    6482	     37963 ns/op	   10048 B/op	      26 allocs/op
+PASS
+ok  	github.com/tr1v3r/stream	18.964s
+
+# Parallel-only follow-up: -bench '^BenchmarkGenericAPI/Parallel' -benchtime=1s -count=5
+
+goos: darwin
+goarch: arm64
+pkg: github.com/tr1v3r/stream
+cpu: Apple M3 Pro
+BenchmarkGenericAPI/Parallel/Legacy-12         	    9621	    117994 ns/op	  200504 B/op	     173 allocs/op
+BenchmarkGenericAPI/Parallel/Legacy-12         	   10000	    123679 ns/op	  200475 B/op	     173 allocs/op
+BenchmarkGenericAPI/Parallel/Legacy-12         	   10000	    112168 ns/op	  200478 B/op	     173 allocs/op
+BenchmarkGenericAPI/Parallel/Legacy-12         	   10000	    111182 ns/op	  200478 B/op	     173 allocs/op
+BenchmarkGenericAPI/Parallel/Legacy-12         	   10000	    111557 ns/op	  200479 B/op	     173 allocs/op
+BenchmarkGenericAPI/Parallel/Pipeline-12       	   10000	    112786 ns/op	  200416 B/op	     172 allocs/op
+BenchmarkGenericAPI/Parallel/Pipeline-12       	   10000	    112580 ns/op	  200417 B/op	     172 allocs/op
+BenchmarkGenericAPI/Parallel/Pipeline-12       	   10000	    119207 ns/op	  200414 B/op	     172 allocs/op
+BenchmarkGenericAPI/Parallel/Pipeline-12       	   10227	    115938 ns/op	  200413 B/op	     172 allocs/op
+BenchmarkGenericAPI/Parallel/Pipeline-12       	   10000	    115282 ns/op	  200414 B/op	     172 allocs/op
+PASS
+ok  	github.com/tr1v3r/stream	11.771s

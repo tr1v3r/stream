@@ -1,7 +1,7 @@
 // Package stream provides Java Streams-like functional operations on Go collections.
 //
 // It enables true lazy evaluation, parallel processing, and functional-style pipelines
-// using Go generics and the iter package (requires Go 1.26+, per go.mod).
+// using Go generics and the iter package (requires Go 1.27+, per go.mod).
 //
 // Intermediate operations compose iter.Seq[T] closures without executing any work.
 // Processing is deferred until a terminal operation ranges over the pipeline.
@@ -16,6 +16,25 @@
 //	    Map(func(n int) int { return n * n }).
 //	    Reduce(func(a, b int) int { return a + b })
 //	// sum == 35
+//
+// # Concrete pipelines
+//
+// Of creates a Pipeline[T] with generic methods. MapTo, FlatMapTo, DistinctBy,
+// Fold, and CollectTo infer their result or key type from their arguments:
+//
+//	names := stream.Of(1, 2, 2, 3).
+//	    MapTo(strconv.Itoa).
+//	    DistinctBy(func(s string) string { return s }).ToSlice() // []string
+//
+// All intermediate methods retain the concrete type. Same-type Map keeps
+// parallel fusion; MapTo and FlatMapTo close the section, transform serially,
+// and retain context, concurrency, and Ordered preference downstream.
+//
+// Existing Streamer factories and methods retain their signatures. Wrap adapts
+// a Streamer to Pipeline, and Pipeline.Stream returns the legacy interface.
+// Pipeline cannot implement Streamer because their intermediate return types
+// differ. These adapters share the source and do not enable terminal reuse.
+// A zero-value Pipeline is empty. The minimum supported compiler is Go 1.27.
 //
 // # Stream Creation
 //
