@@ -131,7 +131,7 @@ stream.SliceOf(1, 2, 3).
 | `Sort` | `(Comparator[T]) Streamer[T]` | Sort ascending |
 | `ReverseSort` | `(Comparator[T]) Streamer[T]` | Sort descending |
 | `Reverse` | `() Streamer[T]` | Reverse element order |
-| `Limit` | `(int64) Streamer[T]` | Take at most N elements |
+| `Limit` | `(int64) Streamer[T]` | Take at most N elements; an unknown input count stays unknown for positive N |
 | `Skip` | `(int64) Streamer[T]` | Skip first N elements |
 | `Pick` | `(start, end, interval int) Streamer[T]` | Pick elements at intervals |
 
@@ -238,6 +238,16 @@ stream.SliceOf(data...).Parallel(4).Ordered().
 - Sections ignore `Parallel` for stateful stages (they materialize serially after the section closes)
 
 Overhead (measured on near-free workloads, Apple M3 Pro): unordered sections run at ~1–2× serial time, ordered ~2×; heavy per-element work scales at ~3.6× with 4 workers. See `docs/proposals/parallel-v2.md`.
+
+Ordered execution limits outstanding work to `n` batches (64 elements each).
+A slow early batch applies backpressure to the source instead of retaining an
+unbounded backlog of later results.
+
+Short-circuiting a parallel section cancels its upstream execution, including
+previous parallel sections and internal `Concat`/`FlatMap` sources. Cancellation
+is local to that execution: it does not cancel the caller's context or prevent
+subsequent stages such as `Limit(1).Append(...)` from running. Workers check
+cancellation before each element; callbacks already running must cooperate.
 
 Use `WithContext(ctx)` to support cancellation:
 

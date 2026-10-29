@@ -14,7 +14,7 @@
 | 文件 | 职责 |
 |---|---|
 | `export.go` | `Streamer[T]` 接口（公开 API 契约） |
-| `stream.go` | `streamer[T]` 实现：惰性闭包组合、并行段执行器 |
+| `stream.go` | `streamer[T]` 实现：带执行 context 的惰性闭包组合、并行段执行器 |
 | `factory.go` | 工厂函数 |
 | `helper.go` | `To` / `AnyTo` 收集辅助 |
 | `doc.go` | 包级 godoc |
@@ -135,6 +135,12 @@ stream.SliceOf(million...).      // seq = slices.Values, sizeHint = 1e6
 ### 3.3 Ordered 路径：保序重排
 
 `Ordered()` 把当前段标记为 `ordered`，执行时走 `orderedSeq`：`orderedFeeder` 给每个元素盖上输入索引（`indexedValue[T]{idx, val, hole}`），`orderedWorkers` 让索引随结果流动（被融合 Filter 丢弃的元素以 **hole** 占位以推进序号），`orderedYield` 在消费端按"批起始索引"重排——批内部连续，对齐的批零逐元素簿记直通，只有末尾残批需要 hole 填充。输出与串行执行逐元素一致（提案 A3 用 1k 条随机管道做性质测试）。
+
+### 3.4 跨段取消与窗口上限
+
+内部 `pipelineSeq[T]` 在 yield 之外携带本次执行的 context，公开 `From` / `Seq` 继续使用 `iter.Seq[T]`。并行段同时观察配置 context 与下游执行 context，并把本段取消信号传给上游，避免上游 Filter 持续拒绝元素时，下游短路清理永久等待。取消不修改 stream，也不取消调用方 context；`Limit(...).Append(...)` 与 Execute 快照复用保持有效。
+
+Ordered feeder 在拉取每批前申请 credit，总计 n 个；消费端按序交付完整批次后才归还，包括全 hole 批次。这样 pending、执行中与排队的批次总数受限于 n，而不只是 channel 的长度受限。等待 credit 可取消，worker-input 发送仍采用 drain 保证安全的普通发送。Workers 在每个元素前检查取消。
 
 ## 4. 设计演化史
 

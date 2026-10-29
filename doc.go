@@ -61,6 +61,12 @@
 //	stream.SliceOf(data...).Parallel(4).Ordered().
 //	    Filter(f).Map(g).ToSlice() // equals serial execution element-for-element
 //
+// Ordered sections bound outstanding work to n batches of 64 elements and
+// apply backpressure until earlier batches have been delivered. Short-circuit
+// cancellation propagates upstream through parallel sections and internal
+// stream adapters without cancelling the caller's context. Workers check
+// cancellation before each element; running callbacks must cooperate.
+//
 // See docs/proposals/parallel-v2.md for semantics and measured overheads.
 //
 // # Helper Functions

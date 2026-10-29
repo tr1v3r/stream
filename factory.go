@@ -1,6 +1,9 @@
 package stream
 
-import "iter"
+import (
+	"context"
+	"iter"
+)
 
 // SliceOf creates a stream from a slice or variadic elements.
 func SliceOf[T any](slice ...T) Streamer[T] {
@@ -20,7 +23,13 @@ func Repeat[T any](t T) Streamer[T] {
 
 // RepeatN creates a stream repeating t exactly n times.
 func RepeatN[T any](t T, count int64) Streamer[T] {
-	return Repeat(t).Limit(count)
+	return newStreamer(func(yield func(T) bool) {
+		for range count {
+			if !yield(t) {
+				return
+			}
+		}
+	}, max(count, 0))
 }
 
 // Concat concatenates srcs in order: all elements of the first stream, then
@@ -28,15 +37,15 @@ func RepeatN[T any](t T, count int64) Streamer[T] {
 // empty argument list yields an empty stream; short-circuiting the result
 // stops pulling the remaining sources.
 func Concat[T any](srcs ...Streamer[T]) Streamer[T] {
-	return newStreamer(func(yield func(T) bool) {
+	return &streamer[T]{ctx: context.Background(), sizeHint: -1, seq: func(ctx context.Context, yield func(T) bool) {
 		for _, src := range srcs {
-			for v := range src.Seq() {
+			for v := range streamSeq(src).bind(ctx) {
 				if !yield(v) {
 					return
 				}
 			}
 		}
-	}, -1)
+	}}
 }
 
 // From wraps an existing iter.Seq[T] as a Streamer. sizeHint declares the
