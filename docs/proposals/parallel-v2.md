@@ -76,7 +76,7 @@ runParallel(prev iter.Seq[T], stage func(T) (T, bool), workers int, ordered bool
 
 - **Feeder** (1 goroutine): pulls `prev`, emits `(index, element)` into `in`.
 - **Workers** (n goroutines): apply `stage`, emit `(index, result)` into `out`.
-- **Consumer** (the caller's range): unordered mode yields directly; ordered mode reconstructs sequence order via a slot ring (see 3.3).
+- **Consumer** (the caller's range): unordered mode yields directly; ordered mode reconstructs sequence order via a batch-indexed map (see 3.3).
 - **Shutdown**: exactly the v1 proven pattern — derived cancellable ctx, workers drain `in` after cancel, consumer drains `out` on any exit. One implementation, one leak test.
 
 Batching: feeder sends **batches of 64** (two int64 counts per element of index+value already amortize channel cost; batching reduces it further and gives workers cache locality). Tunable constant, benchmarked in phase 1.
@@ -86,16 +86,36 @@ Batching: feeder sends **batches of 64** (two int64 counts per element of index+
 `Parallel(n)` sections optionally `.Ordered()`:
 
 - Each element carries its input index.
-- Consumer fills `slots[i % window]`; yields slot `next` when present; window = `workers × batch` bounded buffer (order only needs a *sliding* window, not full materialization).
-- Backpressure is natural: consumer blocks on `next` slot ⇒ feeder pauses ⇒ upstream stages stall.
+- Consumer stores results by batch start index and emits contiguous batches; filtered elements retain hole placeholders.
+- The feeder acquires a credit before pulling each batch. There are `workers` credits, returned only after a batch has been delivered in order (including all-hole batches). Outstanding work is therefore bounded by `workers × batch`, independently of channel occupancy.
+- Waiting for a credit is cancellable. Worker-input sends remain plain blocking sends: cancelled workers drain input and the consumer drains output.
+- A slow first batch exhausts credits and stops source pulls; later results cannot accumulate without bound.
 
-Cost model (to verify in phase-1 benchmark): ordered adds one slot check + copy per element, no extra goroutines.
+Ordered adds an index and hole marker per element, plus a credit transfer and map lookup per batch. The existing performance gates cover this overhead.
 
 ### 3.4 Section boundaries
 
 Stateful ops (`Distinct`/`DistinctBy`/`Sort`/`ReverseSort`/`Reverse`/`Limit`/`Skip`/`Pick`/`Execute`) **close** the current parallel section (materialize via the fused stage), then a new section may open. Consequence: `Parallel(4).Sort(cmp)` sorts serially *after* a parallel pre-section — explicit and documented, vs v1's silent ignore.
 
 `FlatMap`/`MapTo` change the element type ⇒ close the section too (fused stage is monomorphic per section). Documented as "type changes end the parallel section".
+
+### 3.5 Execution cancellation across sections
+
+The internal `pipelineSeq[T]` carries an execution context alongside its yield
+callback; `From` and `Seq` retain their public `iter.Seq[T]` API. Each parallel
+section derives a local context from its configured context and observes its
+downstream execution context. Its feeder passes that local context upstream.
+Thus a downstream short circuit interrupts an upstream section even when its
+Filter rejects all remaining elements and never yields again.
+
+Serial stages and internal Concat/FlatMap adapters forward the execution
+context. Cancellation never mutates the stream or cancels the caller's context;
+a completed Limit can still be followed by Append, and Execute snapshots remain
+re-iterable. Foreign Streamer implementations remain cooperative sources through
+Seq; their private execution cannot be cancelled if they never yield. Workers
+check cancellation before every element, then drain input without executing
+further callbacks. Already-running callbacks and sources that block without
+yielding still need their own cancellation support.
 
 ## 4. API
 

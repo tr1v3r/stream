@@ -35,7 +35,7 @@ func seqFromSlice[T any](s []T) iter.Seq[T] { return slices.Values(s) }
 
 type streamer[T any] struct {
 	ctx          context.Context
-	seq          iter.Seq[T]
+	seq          pipelineSeq[T]
 	sizeHint     int64 // known size, or -1 for unknown
 	parallelSize int   // 0=sync, >0=parallel workers
 
@@ -50,8 +50,52 @@ type streamer[T any] struct {
 	ordered bool
 }
 
+// pipelineSeq carries per-execution cancellation upstream without mutating a
+// stream or cancelling unrelated branches. Public sources still use iter.Seq.
+type pipelineSeq[T any] func(context.Context, func(T) bool)
+
+func (seq pipelineSeq[T]) bind(ctx context.Context) iter.Seq[T] {
+	return func(yield func(T) bool) { seq(ctx, yield) }
+}
+
+func sourceSeq[T any](seq iter.Seq[T]) pipelineSeq[T] {
+	return func(ctx context.Context, yield func(T) bool) {
+		for v := range seq {
+			if ctx.Err() != nil || !yield(v) {
+				return
+			}
+		}
+	}
+}
+
+// streamSeq preserves execution cancellation through internal stream adapters.
+func streamSeq[T any](s Streamer[T]) pipelineSeq[T] {
+	if st, ok := s.(*streamer[T]); ok {
+		seq := st.ensureFlushed().seq
+		return func(ctx context.Context, yield func(T) bool) {
+			for v := range seq.bind(ctx) {
+				if st.cancelled() || !yield(v) {
+					return
+				}
+			}
+		}
+	}
+	return sourceSeq(s.Seq())
+}
+
+// sectionContext observes both downstream execution cancellation and the
+// context captured when this section was built.
+func sectionContext(parent, configured context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(configured)
+	stop := context.AfterFunc(parent, cancel)
+	if parent.Err() != nil {
+		cancel()
+	}
+	return ctx, func() { stop(); cancel() }
+}
+
 func newStreamer[T any](seq iter.Seq[T], sizeHint int64) *streamer[T] {
-	return &streamer[T]{ctx: context.Background(), seq: seq, sizeHint: sizeHint}
+	return &streamer[T]{ctx: context.Background(), seq: sourceSeq(seq), sizeHint: sizeHint}
 }
 
 func (s *streamer[T]) cancelled() bool { return s.ctx.Err() != nil }
@@ -88,7 +132,7 @@ const parallelBatchSize = 64
 
 // fusedFeeder pulls upstream into the feeder goroutine and emits
 // parallelBatchSize batches on in, stopping on ctx cancellation.
-func fusedFeeder[T any](ctx context.Context, prev iter.Seq[T], in chan<- []T, batch int) {
+func fusedFeeder[T any](ctx context.Context, prev pipelineSeq[T], in chan<- []T, batch int) {
 	defer close(in)
 	buf := make([]T, 0, batch)
 	flush := func() {
@@ -98,7 +142,7 @@ func fusedFeeder[T any](ctx context.Context, prev iter.Seq[T], in chan<- []T, ba
 		}
 	}
 	defer flush()
-	for v := range prev {
+	for v := range prev.bind(ctx) {
 		if ctx.Err() != nil {
 			return
 		}
@@ -121,6 +165,9 @@ func fusedWorkers[T any](ctx context.Context, stage func(T) (T, bool), in <-chan
 				}
 				res := make([]T, 0, len(items))
 				for _, v := range items {
+					if ctx.Err() != nil {
+						break
+					}
 					if r, ok := stage(v); ok {
 						res = append(res, r)
 					}
@@ -143,9 +190,21 @@ type indexedValue[T any] struct {
 }
 
 // orderedFeeder pulls upstream, stamps input indices, and emits batches of
-// indexed elements (proposal 3.3).
-func orderedFeeder[T any](ctx context.Context, prev iter.Seq[T], in chan<- []indexedValue[T], batch int) {
+// indexed elements (proposal 3.3). A credit is held from before the first
+// source pull until the consumer finishes delivering that batch in order.
+func orderedFeeder[T any](ctx context.Context, prev pipelineSeq[T], in chan<- []indexedValue[T], batch int, credits chan struct{}) {
 	defer close(in)
+	acquire := func() bool {
+		select {
+		case credits <- struct{}{}:
+			return ctx.Err() == nil
+		case <-ctx.Done():
+			return false
+		}
+	}
+	if !acquire() {
+		return
+	}
 	buf := make([]indexedValue[T], 0, batch)
 	flush := func() {
 		if len(buf) > 0 {
@@ -155,7 +214,7 @@ func orderedFeeder[T any](ctx context.Context, prev iter.Seq[T], in chan<- []ind
 	}
 	defer flush()
 	i := 0
-	for v := range prev {
+	for v := range prev.bind(ctx) {
 		if ctx.Err() != nil {
 			return
 		}
@@ -163,6 +222,9 @@ func orderedFeeder[T any](ctx context.Context, prev iter.Seq[T], in chan<- []ind
 		i++
 		if len(buf) == batch {
 			flush()
+			if !acquire() {
+				return
+			}
 		}
 	}
 }
@@ -179,13 +241,18 @@ func orderedWorkers[T any](ctx context.Context, stage func(T) (T, bool), in <-ch
 				}
 				res := make([]indexedValue[T], 0, len(items))
 				for _, iv := range items {
+					if ctx.Err() != nil {
+						break
+					}
 					if r, ok := stage(iv.val); ok {
 						res = append(res, indexedValue[T]{idx: iv.idx, val: r})
 					} else {
 						res = append(res, indexedValue[T]{idx: iv.idx, hole: true})
 					}
 				}
-				out <- res
+				if len(res) > 0 {
+					out <- res
+				}
 			}
 		})
 	}
@@ -197,8 +264,7 @@ func orderedWorkers[T any](ctx context.Context, stage func(T) (T, bool), in <-ch
 // batches yield straight through with zero per-element bookkeeping; only
 // the gap-filling partial batches at stream end need element-level holes.
 // pending holds at most the in-flight window of batches.
-func orderedYield[T any](ctx context.Context, out <-chan []indexedValue[T], yield func(T) bool) bool {
-	next := 0                              // next absolute index to emit
+func orderedYield[T any](ctx context.Context, out <-chan []indexedValue[T], credits chan struct{}, yield func(T) bool) bool {
 	pending := map[int][]indexedValue[T]{} // batch start idx -> batch
 	nextBatchStart := 0
 	emit := func(v T) bool {
@@ -221,7 +287,7 @@ func orderedYield[T any](ctx context.Context, out <-chan []indexedValue[T], yiel
 				}
 			}
 			nextBatchStart += len(b)
-			_ = next
+			<-credits // release only after this batch has been delivered in order
 		}
 	}
 	return true
@@ -249,9 +315,9 @@ func (s *streamer[T]) flushFused() *streamer[T] {
 	return next
 }
 
-func (s *streamer[T]) unorderedSeq(stage func(T) (T, bool), prev iter.Seq[T], n int) iter.Seq[T] {
-	return func(yield func(T) bool) {
-		ctx, cancel := context.WithCancel(s.ctx)
+func (s *streamer[T]) unorderedSeq(stage func(T) (T, bool), prev pipelineSeq[T], n int) pipelineSeq[T] {
+	return func(parent context.Context, yield func(T) bool) {
+		ctx, cancel := sectionContext(parent, s.ctx)
 		defer cancel()
 
 		in := make(chan []T, n)
@@ -285,15 +351,16 @@ func (s *streamer[T]) unorderedSeq(stage func(T) (T, bool), prev iter.Seq[T], n 
 	}
 }
 
-func (s *streamer[T]) orderedSeq(stage func(T) (T, bool), prev iter.Seq[T], n int) iter.Seq[T] {
-	return func(yield func(T) bool) {
-		ctx, cancel := context.WithCancel(s.ctx)
+func (s *streamer[T]) orderedSeq(stage func(T) (T, bool), prev pipelineSeq[T], n int) pipelineSeq[T] {
+	return func(parent context.Context, yield func(T) bool) {
+		ctx, cancel := sectionContext(parent, s.ctx)
 		defer cancel()
 
 		in := make(chan []indexedValue[T], n)
 		out := make(chan []indexedValue[T], n)
 
-		go orderedFeeder(ctx, prev, in, parallelBatchSize)
+		credits := make(chan struct{}, n)
+		go orderedFeeder(ctx, prev, in, parallelBatchSize, credits)
 
 		var wg sync.WaitGroup
 		orderedWorkers(ctx, stage, in, out, n, &wg)
@@ -308,7 +375,7 @@ func (s *streamer[T]) orderedSeq(stage func(T) (T, bool), prev iter.Seq[T], n in
 			}
 		}()
 
-		orderedYield(ctx, out, yield)
+		orderedYield(ctx, out, credits, yield)
 	}
 }
 
@@ -324,10 +391,10 @@ func (s *streamer[T]) ensureFlushed() *streamer[T] {
 // effectiveSeq is the sequence terminal operations iterate: any open
 // parallel section is flushed into its single-pool stage first.
 func (s *streamer[T]) effectiveSeq() iter.Seq[T] {
-	return s.ensureFlushed().seq
+	return s.ensureFlushed().seq.bind(context.Background())
 }
 
-func (s *streamer[T]) wrap(newSeq iter.Seq[T], newHint int64) *streamer[T] {
+func (s *streamer[T]) wrap(newSeq pipelineSeq[T], newHint int64) *streamer[T] {
 	return &streamer[T]{ctx: s.ctx, seq: newSeq, sizeHint: newHint, parallelSize: s.parallelSize, ordered: s.ordered}
 }
 
@@ -347,8 +414,8 @@ func (s *streamer[T]) Filter(judge types.Judge[T]) Streamer[T] {
 		return next
 	}
 	prev := s.seq
-	return s.wrap(func(yield func(T) bool) {
-		for v := range prev {
+	return s.wrap(func(ctx context.Context, yield func(T) bool) {
+		for v := range prev.bind(ctx) {
 			if s.cancelled() {
 				return
 			}
@@ -368,8 +435,8 @@ func (s *streamer[T]) Map(m types.Mapper[T]) Streamer[T] {
 		return next
 	}
 	prev := s.seq
-	return s.wrap(func(yield func(T) bool) {
-		for v := range prev {
+	return s.wrap(func(ctx context.Context, yield func(T) bool) {
+		for v := range prev.bind(ctx) {
 			if s.cancelled() {
 				return
 			}
@@ -410,8 +477,8 @@ func MapTo[T, R any](s Streamer[T], m types.Converter[T, R]) Streamer[R] {
 		}, -1)
 	}
 	prev := st.ensureFlushed().seq // type change closes the parallel section
-	return &streamer[R]{ctx: st.ctx, seq: func(yield func(R) bool) {
-		for v := range prev {
+	return &streamer[R]{ctx: st.ctx, seq: func(ctx context.Context, yield func(R) bool) {
+		for v := range prev.bind(ctx) {
 			if st.cancelled() {
 				return
 			}
@@ -434,8 +501,8 @@ func (s *streamer[T]) Peek(consumer types.Consumer[T]) Streamer[T] {
 		return next
 	}
 	prev := s.seq
-	return s.wrap(func(yield func(T) bool) {
-		for v := range prev {
+	return s.wrap(func(ctx context.Context, yield func(T) bool) {
+		for v := range prev.bind(ctx) {
 			if s.cancelled() {
 				return
 			}
@@ -450,12 +517,12 @@ func (s *streamer[T]) Peek(consumer types.Consumer[T]) Streamer[T] {
 // FlatMap implements Streamer.FlatMap; sub-streams are drained in order, sequentially. A parallel section closes first.
 func (s *streamer[T]) FlatMap(f func(T) Streamer[any]) Streamer[any] {
 	prev := s.ensureFlushed().seq
-	return &streamer[any]{ctx: s.ctx, seq: func(yield func(any) bool) {
-		for v := range prev {
+	return &streamer[any]{ctx: s.ctx, seq: func(ctx context.Context, yield func(any) bool) {
+		for v := range prev.bind(ctx) {
 			if s.cancelled() {
 				return
 			}
-			for item := range f(v).Seq() {
+			for item := range streamSeq(f(v)).bind(ctx) {
 				if !yield(item) {
 					return
 				}
@@ -480,7 +547,8 @@ func (s *streamer[T]) Distinct() Streamer[T] {
 // seen, keeping first occurrences. Keys use Go map equality (K comparable),
 // avoiding the string-coercion collisions of Distinct. Like Distinct it runs
 // serially — the shared key map is not concurrency-safe — while preserving
-// parallelSize for downstream operations.
+// parallelSize for downstream operations on native streams. Foreign streams
+// are consumed serially through Seq, never through a potentially parallel Filter.
 func DistinctBy[T any, K comparable](s Streamer[T], key func(T) K) Streamer[T] {
 	seen := make(map[K]struct{})
 	judge := func(t T) bool {
@@ -493,11 +561,11 @@ func DistinctBy[T any, K comparable](s Streamer[T], key func(T) K) Streamer[T] {
 	}
 	st, ok := s.(*streamer[T])
 	if !ok {
-		return s.Filter(judge) // foreign Streamer implementations
+		st = newStreamer(s.Seq(), -1)
 	}
 	prev := st.ensureFlushed().seq
-	return st.wrap(func(yield func(T) bool) {
-		for v := range prev {
+	return st.wrap(func(ctx context.Context, yield func(T) bool) {
+		for v := range prev.bind(ctx) {
 			if st.cancelled() {
 				return
 			}
@@ -513,8 +581,8 @@ func DistinctBy[T any, K comparable](s Streamer[T], key func(T) K) Streamer[T] {
 func (s *streamer[T]) Sort(comparator types.Comparator[T]) Streamer[T] {
 	prev := s.ensureFlushed().seq
 	hint := s.sizeHint
-	return s.wrap(func(yield func(T) bool) {
-		data := materialize(s.ctx, prev)
+	return s.wrap(func(ctx context.Context, yield func(T) bool) {
+		data := materialize(s.ctx, prev.bind(ctx))
 		slices.SortFunc(data, comparator)
 		for _, v := range data {
 			if !yield(v) {
@@ -529,8 +597,8 @@ func (s *streamer[T]) Sort(comparator types.Comparator[T]) Streamer[T] {
 func (s *streamer[T]) ReverseSort(comparator types.Comparator[T]) Streamer[T] {
 	prev := s.ensureFlushed().seq
 	hint := s.sizeHint
-	return s.wrap(func(yield func(T) bool) {
-		data := materialize(s.ctx, prev)
+	return s.wrap(func(ctx context.Context, yield func(T) bool) {
+		data := materialize(s.ctx, prev.bind(ctx))
 		slices.SortFunc(data, func(a, b T) int { return comparator(b, a) })
 		for _, v := range data {
 			if !yield(v) {
@@ -545,8 +613,8 @@ func (s *streamer[T]) ReverseSort(comparator types.Comparator[T]) Streamer[T] {
 func (s *streamer[T]) Reverse() Streamer[T] {
 	prev := s.ensureFlushed().seq
 	hint := s.sizeHint
-	return s.wrap(func(yield func(T) bool) {
-		data := materialize(s.ctx, prev)
+	return s.wrap(func(ctx context.Context, yield func(T) bool) {
+		data := materialize(s.ctx, prev.bind(ctx))
 		slices.Reverse(data)
 		for _, v := range data {
 			if !yield(v) {
@@ -559,18 +627,23 @@ func (s *streamer[T]) Reverse() Streamer[T] {
 // Limit implements Streamer.Limit; stops pulling upstream once the count is reached. A parallel section closes first.
 func (s *streamer[T]) Limit(l int64) Streamer[T] {
 	prev := s.ensureFlushed().seq
-	newHint := l
-	if s.sizeHint >= 0 && s.sizeHint < l {
-		newHint = s.sizeHint
+	newHint := int64(-1)
+	if l <= 0 {
+		newHint = 0
+	} else if s.sizeHint >= 0 {
+		newHint = min(s.sizeHint, l)
 	}
-	return s.wrap(func(yield func(T) bool) {
+	return s.wrap(func(ctx context.Context, yield func(T) bool) {
+		if l <= 0 {
+			return
+		}
 		count := int64(0)
-		for v := range prev {
-			if s.cancelled() || count >= l {
+		for v := range prev.bind(ctx) {
+			if s.cancelled() {
 				return
 			}
 			count++
-			if !yield(v) {
+			if !yield(v) || count == l {
 				return
 			}
 		}
@@ -587,9 +660,9 @@ func (s *streamer[T]) Skip(n int64) Streamer[T] {
 	if s.sizeHint >= 0 {
 		newHint = max(s.sizeHint-n, 0)
 	}
-	return s.wrap(func(yield func(T) bool) {
+	return s.wrap(func(ctx context.Context, yield func(T) bool) {
 		skipped := int64(0)
-		for v := range prev {
+		for v := range prev.bind(ctx) {
 			if s.cancelled() {
 				return
 			}
@@ -608,7 +681,7 @@ func (s *streamer[T]) Skip(n int64) Streamer[T] {
 // A cancelled context stops the stage promptly (empty when cancelled up front).
 func (s *streamer[T]) Pick(start, end, interval int) Streamer[T] {
 	prev := s.ensureFlushed().seq
-	return s.wrap(func(yield func(T) bool) {
+	return s.wrap(func(ctx context.Context, yield func(T) bool) {
 		if start < 0 || interval <= 0 {
 			return
 		}
@@ -618,9 +691,9 @@ func (s *streamer[T]) Pick(start, end, interval int) Streamer[T] {
 			if s.sizeHint >= 0 {
 				end = int(s.sizeHint) - 1
 			} else {
-				data := materialize(s.ctx, prev)
+				data := materialize(s.ctx, prev.bind(ctx))
 				for i := start; i < len(data); i += interval {
-					if !yield(data[i]) {
+					if !yield(data[i]) || interval >= len(data)-i {
 						return
 					}
 				}
@@ -628,7 +701,7 @@ func (s *streamer[T]) Pick(start, end, interval int) Streamer[T] {
 			}
 		}
 		idx := 0
-		for v := range prev {
+		for v := range prev.bind(ctx) {
 			if s.cancelled() {
 				return
 			}
@@ -652,8 +725,8 @@ func (s *streamer[T]) Append(data ...T) Streamer[T] {
 	if s.sizeHint < 0 {
 		newHint = -1
 	}
-	return s.wrap(func(yield func(T) bool) {
-		for v := range prev {
+	return s.wrap(func(ctx context.Context, yield func(T) bool) {
+		for v := range prev.bind(ctx) {
 			if !yield(v) {
 				return
 			}
@@ -669,9 +742,9 @@ func (s *streamer[T]) Append(data ...T) Streamer[T] {
 // Execute implements Streamer.Execute; ctx and parallelSize carry over to the snapshot.
 // A cancelled context yields an empty snapshot promptly.
 func (s *streamer[T]) Execute() Streamer[T] {
-	data := materialize(s.ctx, s.ensureFlushed().seq)
+	data := materialize(s.ctx, s.effectiveSeq())
 	// keep ctx and parallelSize so downstream ops behave as before the snapshot
-	return &streamer[T]{ctx: s.ctx, seq: seqFromSlice(data), sizeHint: int64(len(data)), parallelSize: s.parallelSize, ordered: s.ordered}
+	return &streamer[T]{ctx: s.ctx, seq: sourceSeq(seqFromSlice(data)), sizeHint: int64(len(data)), parallelSize: s.parallelSize, ordered: s.ordered}
 }
 
 // Parallel implements Streamer.Parallel: n <= 0 is a no-op returning the

@@ -6,7 +6,7 @@ This file provides guidance for AI coding agents (Claude Code, Codex, etc.) work
 
 ## Project Overview
 
-Go stream processing library (`github.com/tr1v3r/stream`) providing Java Streams-like functionality. Core pipeline representation is `iter.Seq[T]`, enabling true lazy evaluation with short-circuit support. Zero external dependencies; `go.sum` is empty. `go.mod` declares `go 1.26.0`.
+Go stream processing library (`github.com/tr1v3r/stream`) providing Java Streams-like functionality. Public iteration uses `iter.Seq[T]`; internal `pipelineSeq[T]` closures carry execution cancellation upstream while retaining lazy evaluation and short-circuit support. Zero external dependencies; `go.sum` is empty. `go.mod` declares `go 1.26.0`.
 
 ## Development Commands
 
@@ -39,12 +39,12 @@ go test -run 'TestBenchmarkGate' -v -count=1 .
    - Reduce variants: `Reduce`, `ReduceFrom`, `ReduceWith`, `ReduceBy`
 
 2. **Stream Implementation** (`stream.go`): Core `streamer[T]` struct
-   - Holds `iter.Seq[T]` as internal pipeline
+   - Holds `pipelineSeq[T]` internally (`context.Context` + yield callback); public sources and terminals still expose `iter.Seq[T]`
    - `ctx context.Context` for cancellation (`WithContext` to set)
    - `sizeHint int64` for known-size optimizations (-1 for unknown)
    - `parallelSize int` for concurrent section workers (0=sync)
    - `ordered bool` marks an order-preserving section
-   - All intermediate ops compose `iter.Seq[T]` closures (true lazy)
+   - All intermediate ops compose context-aware yield closures (true lazy)
    - Parallel sections: `fused func(T) (T, bool)` accumulates stateless stages; `flushFused` runs them on one worker pool (`fusedFeeder`/`fusedWorkers`, or `orderedFeeder`/`orderedWorkers`/`orderedYield` for `Ordered()`)
    - Sorting via `slices.SortFunc` (type-safe pdqsort, no sort.Interface adapter)
 
@@ -81,7 +81,7 @@ go test -run 'TestBenchmarkGate' -v -count=1 .
 
 - `Filter`, `Distinct`, `DistinctBy`, `FlatMap`, `Pick`: hint becomes -1
 - `Map`, `Peek`, `Convert`: hint preserved
-- `Limit(n)`: min(hint, n) if hint >= 0
+- `Limit(n)`: 0 for n <= 0; min(hint, n) if hint >= 0; otherwise unknown (-1)
 - `Skip(n)`: max(0, hint - n) if hint >= 0
 - `Sort`, `ReverseSort`, `Reverse`, `Append`: hint preserved / additive
 - `Count()` short-circuits to `sizeHint` when known — keep the hint honest when adding ops
@@ -98,8 +98,8 @@ go test -run 'TestBenchmarkGate' -v -count=1 .
 
 When adding new stream operations:
 1. Add method to `Streamer` interface in `export.go`
-2. Implement in `streamer[T]` in `stream.go` (compose an `iter.Seq` closure; keep lazy)
+2. Implement in `streamer[T]` in `stream.go` (compose a `pipelineSeq` closure and forward its execution context; keep lazy)
 3. Update `sizeHint` propagation deliberately (see table above)
-4. For parallel support, accumulate into the fused section (`fused` + `thenFused`) and let `ensureFlushed`/`effectiveSeq` close it. Leak-freedom pattern (keep it): `flushFused`/`orderedSeq` derive a cancellable child ctx; the feeder has a single cancellation exit (top-of-loop check, plain blocking send — workers always drain `in`, discarding after cancel); the consumer drains `out` on any exit. Avoid select-with-Done on the feeder send: when both cases are ready Go picks randomly, which made coverage and exit paths nondeterministic.
+4. For parallel support, accumulate into the fused section (`fused` + `thenFused`) and let `ensureFlushed`/`effectiveSeq` close it. Leak-freedom pattern (keep it): `flushFused`/`orderedSeq` derive a local cancellable ctx observing both the configured context and downstream execution context, and pass it upstream via `pipelineSeq`; feeders check cancellation before accepting values and use plain blocking worker-input sends — workers always drain `in`, discarding after cancel; the consumer drains `out` on any exit. Ordered feeders separately acquire a cancellable batch credit before pulling; the consumer returns it only after ordered delivery. Workers check cancellation per element. Avoid select-with-Done on the worker-input feeder send: when both cases are ready Go picks randomly, which made coverage and exit paths nondeterministic.
 5. Add assertion-based tests: `factory_test.go` / `ops_test.go` / `terminal_test.go` / `parallel_test.go` / `branch_test.go` hold the suite (statement coverage 100%); parallel results must be compared as sorted multisets (order is not preserved). `TestParallel_ShortCircuitNoLeak` and `TestParallel_ConcurrentTakeNoRace` guard the concurrency fixes — always run `-race` before shipping parallel changes. `branch_test.go` covers defensive branches (mid-stream cancellation, downstream short-circuit per op, Pick materialize path, foreign Streamer fallback) — extend it when adding new branches. `benchmark_gate_test.go` is the CI performance gate (G1-G7), machine-independent by construction: same-process ratios (G1 unordered <=6x, G2 ordered <=8x, G3 heavy speedup >=1.5x, G4 sort <=2.5x direct stdlib, G5 DistinctBy <=0.6x Distinct time and <=5% of its allocs) plus deterministic allocation gates (G6 Take <=50 allocs, G7 lazy Limit <=200 allocs on 100k). Thresholds are calibrated against measured healthy ranges on laptop and shared-CI hardware — see the calibration table in the file; if a gate fails on real regressions do not loosen the threshold without a proposal-level justification. Proposal A6 (multi-section speedup) is deliberately not a time gate: it is core-count dependent; its correctness is pinned by TestParallelV2_MidChainParallelReopens.
 6. Update `README.md` and `doc.go` documentation
